@@ -48,7 +48,8 @@ $(function() {
 
     Octolapse.RenderingProfileViewModel = function (values) {
         var self = this;
-        self.profileTypeName = ko.observable("Render")
+        self.data = ko.observable();
+        self.profileTypeName = ko.observable("Rendering");
         self.guid = ko.observable(values.guid);
         self.name = ko.observable(values.name);
         self.description = ko.observable(values.description);
@@ -59,8 +60,8 @@ $(function() {
         self.max_fps = ko.observable(values.max_fps);
         self.min_fps = ko.observable(values.min_fps);
         self.output_format = ko.observable(values.output_format);
-        self.sync_with_timelapse = ko.observable(values.sync_with_timelapse);
         self.bitrate = ko.observable(values.bitrate);
+        self.constant_rate_factor = ko.observable(values.constant_rate_factor);
         self.post_roll_seconds = ko.observable(values.post_roll_seconds);
         self.pre_roll_seconds = ko.observable(values.pre_roll_seconds);
         self.output_template = ko.observable(values.output_template);
@@ -68,9 +69,11 @@ $(function() {
         self.selected_watermark = ko.observable(values.selected_watermark); // Absolute filepath of the selected watermark.
         self.watermark_list = ko.observableArray(); // A list of WatermarkImages that are available for selection on the server.
         self.overlay_text_template = ko.observable(values.overlay_text_template);
-        self.font_list = ko.observableArray(); // A list of Fonts that are available for selection on the server.
         self.overlay_font_path = ko.observable(values.overlay_font_path);
         self.overlay_font_size = ko.observable(values.overlay_font_size);
+        self.archive_snapshots = ko.observable(values.archive_snapshots);
+        self.thread_count = ko.observable(values.thread_count);
+        self.data.font_list = ko.observableArray(); // A list of Fonts that are available for selection on the server.
         // Text position as a JSON string.
         self.overlay_text_pos = ko.pureComputed({
             read: function() {
@@ -88,61 +91,91 @@ $(function() {
                 if (value === undefined) {
                     return;
                 }
-                xy = JSON.parse(value);
-                self.overlay_text_pos_x(xy[0]);
-                self.overlay_text_pos_y(xy[1]);
+                try {
+                    var positions = JSON.parse(value);
+                    self.overlay_text_pos_x(positions[0]);
+                    self.overlay_text_pos_y(positions[1]);
+                }
+                catch(exc)
+                {
+                    self.overlay_text_pos_x(0);
+                    self.overlay_text_pos_y(0);
+                }
+
             },
         });
-        self.overlay_text_pos_x = values.overlay_text_pos_x === undefined ? ko.observable() : ko.observable(values.overlay_text_pos_x);
-        self.overlay_text_pos_y = values.overlay_text_pos_y === undefined ? ko.observable() : ko.observable(values.overlay_text_pos_y);
+        self.overlay_text_pos_x = ko.observable();
+        self.overlay_text_pos_y = ko.observable();
         self.overlay_text_pos(values.overlay_text_pos);
         self.overlay_text_alignment = ko.observable(values.overlay_text_alignment);
         self.overlay_text_valign = ko.observable(values.overlay_text_valign);
         self.overlay_text_halign = ko.observable(values.overlay_text_halign);
-        // The overlay text colour in as a 4-element array, represented in a string. Note values vary from 0-255.
-        // ie. [57, 64, 32, 25]
         self.overlay_text_color = ko.observable(values.overlay_text_color);
-        // The overlay text color formatted as a CSS value. Note RGB vary from 0-255, but A varies from 0-1.
-        // ie. rgba(57, 64, 32, 0.1).
+        self.overlay_outline_color = ko.observable(values.overlay_outline_color);
+        self.overlay_outline_width = ko.observable(values.overlay_outline_width);
+
+        self.text_color_to_css = function(text_color){
+            // Convert to js.
+            var rgba;
+            if (Array.isArray(text_color))
+            {
+                rgba = text_color;
+                // Divide alpha by 255.
+                //rgba[3] = rgba[3] / 255.0;
+            }
+            else
+            {
+                rgba = JSON.parse(text_color);
+            }
+            // Build the correct string.
+            return 'rgba(' + rgba.join(', ') + ')'
+        };
+
+        self.css_to_text_color = function(css){
+            // Extract values.
+                var rgba = /rgba\((\d+),\s*(\d+),\s*(\d+),\s(\d*\.?\d+)\)/.exec(css).slice(1).map(Number);
+                // Multiply alpha by 255 and round.
+                //rgba[3] = Math.round(rgba[3] * 255);
+                // Write to variable.
+                return JSON.stringify(rgba);
+        };
+
         self.overlay_text_color_as_css = ko.pureComputed({
             read: function () {
-                // Convert to js.
-                var rgba = JSON.parse(self.overlay_text_color());
-                // Divide alpha by 255.
-                rgba[3] = rgba[3] / 255;
-                // Build the correct string.
-                return 'rgba(' + rgba.join(', ') + ')'
+                return self.text_color_to_css(self.overlay_text_color());
             },
             write: function (value) {
                 // Extract values.
-                var rgba = /rgba\((\d+),\s*(\d+),\s*(\d+),\s(\d*\.?\d+)\)/.exec(value).slice(1).map(Number);
-                // Multiply alpha by 255 and round.
-                rgba[3] = Math.round(rgba[3] * 255);
-                // Write to variable.
-                self.overlay_text_color(JSON.stringify(rgba));
+                self.overlay_text_color(self.css_to_text_color(value));
             },
         });
 
-        self.overlay_preview_image = ko.observable('');
-        self.overlay_preview_image_error = ko.observable('');
-        self.thread_count = ko.observable(values.thread_count)
-        self.overlay_preview_image_src = ko.computed(function() {
-            return 'data:image/jpeg;base64,' + self.overlay_preview_image();
-        });
-        self.overlay_preview_image_alt_text = ko.computed(function() {
-            if (self.overlay_preview_image_error.length == 0) {
-                return 'A preview of the overlay text.'
-            }
-            return 'Image could not be retrieved from server. The error returned was: ' + self.overlay_preview_image_error() + '.';
+        self.overlay_outline_color_as_css = ko.pureComputed({
+            read: function () {
+                return self.text_color_to_css(self.overlay_outline_color());
+            },
+            write: function (value) {
+                // Extract values.
+                self.overlay_outline_color(self.css_to_text_color(value));
+            },
         });
 
-        self.can_synchronize_format = ko.pureComputed(function() {
-           return ['mp4','h264'].indexOf(self.output_format()) > -1;
+        self.data.overlay_preview_image = ko.observable('');
+        self.data.overlay_preview_image_error = ko.observable('');
+        self.data.overlay_preview_image_src = ko.computed(function() {
+            return 'data:image/jpeg;base64,' + self.data.overlay_preview_image();
+        });
+        self.overlay_preview_image_alt_text = ko.computed(function() {
+            if (self.data.overlay_preview_image_error.length == 0) {
+                return 'A preview of the overlay text.'
+            }
+            return 'Image could not be retrieved from server. The error returned was: ' + self.data.overlay_preview_image_error() + '.';
         });
 
         // This function is called when the Edit Profile dialog shows.
-        self.onShow = function() {
-             $('#overlay_color').minicolors({format: 'rgb', opacity: true});
+        self.onShow = function(parent) {
+             $('#octolapse_rendering_overlay_color').minicolors({format: 'rgb', opacity: true});
+             $('#octolapse_rendering_outline_color').minicolors({format: 'rgb', opacity: true});
              self.updateWatermarkList();
              self.updateFontList();
              self.initWatermarkUploadButton();
@@ -183,22 +216,22 @@ $(function() {
              return OctoPrint.get(OctoPrint.getBlueprintUrl('octolapse') +
                 'rendering/watermark')
                     .then(function(response) {
-                        self.watermark_list.removeAll()
-                        // The let format is not working in some versions of safari
+                        var watermarks = [];
                         for (var index = 0; index < response['filepaths'].length;index++) {
-                            self.watermark_list.push(new WatermarkImage(response['filepaths'][index]));
+                            watermarks.push(new WatermarkImage(response['filepaths'][index]));
                         }
+                        self.watermark_list(watermarks);
                      }, function(response) {
-                        self.watermark_list.removeAll()
+                        var watermarks = [new WatermarkImage("Failed to load watermarks from Octolapse data directory.")];
                         // Hacky solution, but good enough. We shouldn't encounter this error too much anyways.
-                        self.watermark_list.push(new WatermarkImage("Failed to load watermarks from Octolapse data directory."));
+                        self.watermark_list(watermarks);
                      });
         };
 
         self.initWatermarkUploadButton = function() {
              // Set up the file upload button.
-             var $watermarkUploadElement = $('#octolapse_watermark_path_upload');
-             var $progressBarContainer = $('#octolapse-upload-watermark-progress');
+             var $watermarkUploadElement = $('#octolapse_rendering_watermark_path_upload');
+             var $progressBarContainer = $('#octolapse_rendering_upload_watermark_progress');
              var $progressBar = $progressBarContainer.find('.progress-bar');
 
              $watermarkUploadElement.fileupload({
@@ -206,9 +239,13 @@ $(function() {
                 maxNumberOfFiles: 1,
                 headers: OctoPrint.getRequestHeaders(),
                 // Need to chunk large image files or else OctoPrint/Flask will reject them.
-                // TODO: Octoprint limits file upload size on a per-endpoint basis.
-                // http://docs.octoprint.org/en/master/plugins/hooks.html#octoprint-server-http-bodysize
-                maxChunkSize: 100000,
+                // TODO: Monitor issue with chunking and re-add when it is fixed.
+                //maxChunkSize: 1000000,
+                 maxFilesize: 10,
+                 start: function(e) {
+                    $progressBar.text("Starting...");
+                    $progressBar.animate({'width': '0'}, {'queue': false}).removeClass('failed');
+                },
                 progressall: function (e, data) {
                     // TODO: Get a better progress bar implementation.
                     var progress = parseInt(data.loaded / data.total * 100, 10);
@@ -249,14 +286,17 @@ $(function() {
         self.updateFontList = function() {
              return OctoPrint.get(OctoPrint.getBlueprintUrl('octolapse') + 'rendering/font')
                     .then(function(response) {
-                        self.font_list.removeAll();
+                        var server_fonts = response.fonts;
+                        var font_list = [];
+
                         // The let expression was not working in safari
-                        for (var index = 0; index< response.length; index++) {
-                            self.font_list.push(new Font(response[index]));
+                        for (var index = 0; index< server_fonts.length; index++) {
+                            font_list.push(new Font(server_fonts[index]));
                         }
+                        self.data.font_list(font_list);
                      }, function(response) {
                         // Failed to load any fonts.
-                        self.font_list.removeAll();
+                        self.data.font_list.removeAll();
                      });
         };
 
@@ -267,72 +307,141 @@ $(function() {
 
         // Request a preview of the overlay from the server.
         self.requestOverlayPreview = function() {
-            data = {
-                    'overlay_text_template': self.overlay_text_template(),
-                    'overlay_font_path': self.overlay_font_path(),
-                    'overlay_font_size': self.overlay_font_size(),
-                    'overlay_text_pos': self.overlay_text_pos(),
-                    'overlay_text_alignment': self.overlay_text_alignment(),
-                    'overlay_text_valign': self.overlay_text_valign(),
-                    'overlay_text_halign': self.overlay_text_halign(),
-                    'overlay_text_color': self.overlay_text_color(),
+            if (!self.overlay_text_template())
+            {
+                self.data.overlay_preview_image('');
+                self.data.overlay_preview_image_error(
+                    "Enter the text you wish to appear in your overlay in the 'Text' box above, and click refresh to preview the rendering overlay."
+                );
+                return;
+            }
+            if (self.overlay_font_path() === "")
+            {
+                self.data.overlay_preview_image('');
+                self.data.overlay_preview_image_error(
+                    "Choose a font from the list above, and click refresh to preview the rendering overlay."
+                );
+                return;
+            }
+
+            var data = {
+                'overlay_text_template': self.overlay_text_template(),
+                'overlay_font_path': self.overlay_font_path(),
+                'overlay_font_size': self.overlay_font_size(),
+                'overlay_text_pos': self.overlay_text_pos(),
+                'overlay_text_alignment': self.overlay_text_alignment(),
+                'overlay_text_valign': self.overlay_text_valign(),
+                'overlay_text_halign': self.overlay_text_halign(),
+                'overlay_text_color': self.overlay_text_color(),
+                'overlay_outline_color': self.overlay_outline_color(),
+                'overlay_outline_width': self.overlay_outline_width()
             };
-            OctoPrint.post(OctoPrint.getBlueprintUrl('octolapse') + 'rendering/previewOverlay', data)
-                .then(function(response, success_name, response_status) {
-                    // Loaded the overlay!
-                    self.overlay_preview_image(response.image);
-                    self.overlay_preview_image_error('');
+            $.ajax({
+                url: "./" + OctoPrint.getBlueprintUrl('octolapse') + 'rendering/previewOverlay',
+                type: "POST",
+                data: JSON.stringify(data),
+                contentType: "application/json",
+                dataType: "json",
+                success: function (results) {
+                    self.data.overlay_preview_image(results.image);
+                    self.data.overlay_preview_image_error('');
                 },
-                function(response_status, error_name, stack_trace) {
+                error: function (XMLHttpRequest, textStatus, errorThrown) {
                     // Failed to load an overlay.
                     //console.log('Failed to load overlay preview from server.')
                     //console.log(stack_trace);
-                    self.overlay_preview_image('');
-                    self.overlay_preview_image_error('Error loading overlay preview: ' + error_name + '. Click to refresh.');
-                });
+                    self.data.overlay_preview_image('');
+                    self.data.overlay_preview_image_error('Error loading overlay preview: ' + errorThrown + '. Click to refresh.');
+                }
+            });
         };
 
         self.toJS = function()
         {
             var copy = ko.toJS(self);
-            delete copy.font_list;
-            delete copy.overlay_preview_image;
-            delete copy.overlay_preview_image_src;
             return copy;
         };
+
+        self.updateFromServer = function(values) {
+            self.name(values.name);
+            self.description(values.description);
+            self.enabled(values.enabled);
+            self.fps_calculation_type(values.fps_calculation_type);
+            self.run_length_seconds(values.run_length_seconds);
+            self.fps(values.fps);
+            self.max_fps(values.max_fps);
+            self.min_fps(values.min_fps);
+            self.output_format(values.output_format);
+            self.bitrate(values.bitrate);
+            // Might not be included in server profiles.  Make sure it is.
+            if (typeof values.constant_rate_factor !== 'undefined')
+                self.constant_rate_factor(values.constant_rate_factor);
+            self.post_roll_seconds(values.post_roll_seconds);
+            self.pre_roll_seconds(values.pre_roll_seconds);
+            self.output_template(values.output_template);
+            self.archive_snapshots(values.archive_snapshots);
+            self.thread_count(values.thread_count);
+        };
+
+        self.automatic_configuration = new Octolapse.ProfileLibraryViewModel(
+            values.automatic_configuration,
+            Octolapse.Renderings.profileOptions.server_profiles,
+            self.profileTypeName(),
+            self,
+            self.updateFromServer
+        );
+
+        self.toJS = function()
+        {
+            // need to remove the parent link from the automatic configuration to prevent a cyclic copy
+            var parent = self.automatic_configuration.parent;
+            self.automatic_configuration.parent = null;
+            var copy = ko.toJS(self);
+            self.automatic_configuration.parent = parent;
+            return copy;
+        };
+        self.on_closed = function(){
+            self.automatic_configuration.on_closed();
+        };
+
+        self.automatic_configuration.is_confirming.subscribe(function(value){
+            //console.log("IsClickable" + value.toString());
+            Octolapse.Renderings.setIsClickable(!value);
+        });
     };
     Octolapse.RenderingProfileValidationRules = {
         rules: {
-            bitrate: { required: true, ffmpegBitRate: true },
-            output_format : {required: true},
-            fps_calculation_type: {required: true},
-            min_fps: { lessThanOrEqual: '#rendering_profile_max_fps' },
-            max_fps: { greaterThanOrEqual: '#rendering_profile_min_fps' },
-            overlay_text_valign: {required: true},
-            overlay_text_halign: {required: true},
-            overlay_text_alignment: {required: true},
-            output_template: {
+            octolapse_rendering_bitrate: { required: true, ffmpegBitRate: true },
+            octolapse_rendering_output_format : {required: true},
+            octolapse_rendering_fps_calculation_type: {required: true},
+            octolapse_rendering_min_fps: { lessThanOrEqual: '#octolapse_rendering_max_fps' },
+            octolapse_rendering_max_fps: { greaterThanOrEqual: '#octolapse_rendering_min_fps' },
+            octolapse_rendering_overlay_text_valign: {required: true},
+            octolapse_rendering_overlay_text_halign: {required: true},
+            octolapse_rendering_overlay_text_alignment: {required: true},
+            octolapse_rendering_output_template: {
                 remote: {
                     url: "./plugin/octolapse/validateRenderingTemplate",
                     type:"post"
                 }
             },
-            overlay_text_template: {
+            octolapse_rendering_overlay_text_template: {
                 remote: {
                     url: "./plugin/octolapse/validateOverlayTextTemplate",
                     type:"post"
                 }
+
             },
-            octolapse_overlay_font_size: { required: true, integerPositive: true },
-            octolapse_overlay_text_pos: { required: true },
+            octolapse_rendering_overlay_font_size: { required: true, integerPositive: true },
+            octolapse_rendering_overlay_text_pos: { required: true },
         },
         messages: {
-            name: "Please enter a name for your profile",
-            min_fps: { lessThanOrEqual: 'Must be less than or equal to the maximum fps.' },
-            max_fps: { greaterThanOrEqual: 'Must be greater than or equal to the minimum fps.' },
-            output_template: { octolapseRenderingTemplate: 'Either there is an invalid token in the rendering template, or the resulting file name is not valid.' },
-            overlay_text_template: { octolapseOverlayTextTemplate: 'Either there is an invalid token in the overlay text template, or the resulting file name is not valid.' },
-            octolapse_overlay_text_pos: { required: 'Position offsets must be valid integers.' },
+            octolapse_rendering_name: "Please enter a name for your profile",
+            octolapse_rendering_min_fps: { lessThanOrEqual: 'Must be less than or equal to the maximum fps.' },
+            octolapse_rendering_max_fps: { greaterThanOrEqual: 'Must be greater than or equal to the minimum fps.' },
+            octolapse_rendering_output_template: { octolapseRenderingTemplate: 'Either there is an invalid token in the rendering template, or the resulting file name is not valid.' },
+            octolapse_rendering_overlay_text_template: { octolapseOverlayTextTemplate: 'Either there is an invalid token in the overlay text template, or the resulting file name is not valid.' },
+            octolapse_rendering_overlay_text_pos: { required: 'Position offsets must be valid integers.' },
         }
     };
 });

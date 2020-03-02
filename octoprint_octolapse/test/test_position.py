@@ -22,29 +22,40 @@
 ##################################################################################
 
 import unittest
+import pprint
 from tempfile import NamedTemporaryFile
-from octoprint_octolapse.gcode_parser import Commands
+from octoprint_octolapse.gcode_commands import Commands
 from octoprint_octolapse.position import Pos
 from octoprint_octolapse.position import Position
-from octoprint_octolapse.settings import OctolapseSettings
+from octoprint_octolapse.settings import OctolapseSettings, PrinterProfile, SlicerSettings, Slic3rPeSettings
 
 
 class TestPosition(unittest.TestCase):
     def setUp(self):
+
+        new_settings, defaults_loaded = OctolapseSettings.load(
+            "C:\\Users\\Brad\\AppData\\Roaming\\OctoPrint\\data\\octolapse\\settings.json",
+            "0.4.0rc1.dev0",
+            "C:\\Users\\Brad\\AppData\\Roaming\\OctoPrint\\data\\octolapse\\",
+            "settings.json"
+        )
+
         self.Commands = Commands()
-        self.Settings = OctolapseSettings(NamedTemporaryFile().name)
-        self.Settings.printers[self.Settings.DefaultPrinter.guid] = self.Settings.DefaultPrinter
-        self.Settings.current_printer_profile_guid = self.Settings.DefaultPrinter.guid
-        # in the general test case we want auto_detect_position to be false
-        # else we'll have to simulate a position update (m114 return) after
-        # a home (g28) command
-        self.Settings.current_printer().auto_detect_position = False
+        self.Settings = new_settings
+        self.Printer = self.Settings.profiles.current_printer()
+        self.Stabilization = self.Settings.profiles.current_stabilization()
+        self.Printer.auto_detect_position = False
         # since we've set auto_detect_position to false, we need to set
         # an origin, else X,Y and Z will still be None after a home command
-        self.Settings.current_printer().origin_x = 0
-        self.Settings.current_printer().origin_y = 0
-        self.Settings.current_printer().origin_z = 0
-
+        self.Printer.home_x = 0
+        self.Printer.home_y = 0
+        self.Printer.home_z = 0
+        assert(isinstance(self.Printer, PrinterProfile))
+        self.Printer.slicer_type = SlicerSettings.SlicerTypeSlic3rPe
+        slicer_settings = self.Printer.get_current_slicer_settings()
+        assert(isinstance(slicer_settings, Slic3rPeSettings))
+        slicer_settings.retract_length = 0.8
+        slicer_settings.retract_speed = 2400/60
         self.OctoprintPrinterProfile = self.create_octolapse_printer_profile()
 
     def tearDown(self):
@@ -62,106 +73,89 @@ class TestPosition(unittest.TestCase):
             }
         }
 
-    def test_PositionError(self):
-        """Test the IsInBounds function to make sure the program will not attempt to operate after being told to move
-        out of bounds. """
-        position = Position(self.Settings, self.OctoprintPrinterProfile, False)
+    def test_wipe(self):
+        pp = pprint.PrettyPrinter(indent=4)
+        position = Position(self.Printer, self.Stabilization, self.OctoprintPrinterProfile, False)
+        # send initialization gcode
+        position.update("M83")
+        position.update("G90")
+        position.update("G28")
+        position.update("G1 X0.000 Y30.000 Z1.000 E0.00000 F10800; Short Reverse Wipe - Travel to lifted start point")
+        assert(not position.get_wipe_gcodes())
+        position.update("G1 X0.000 Y30.000 Z0.400 E0.00000 F10800; Short Reverse Wipe - Delift")
+        assert(not position.get_wipe_gcodes())
+        position.update("G1 X0.000 Y30.000 Z0.400 E0.80000 F2100; Short Reverse Wipe - Deretract")
+        assert(not position.get_wipe_gcodes())
+        position.update("G1 X50.000 Y30.000 Z0.400 E1.56770 F1200; Short Reverse Wipe - Extrude to midpoint")
+        gcodes = position.get_wipe_gcodes()
+        pp.pprint(gcodes)
+        position.undo_update()
+        assert(not position.get_wipe_gcodes())
+        position.update("G1 X50.000 Y30.000 Z0.400 E1.56770 F1200; Short Reverse Wipe - Extrude to midpoint")
+        gcodes = position.get_wipe_gcodes()
+        pp.pprint(gcodes)
+        # try a travel, should reset the wipe gcodes
+        position.update("G1 X0 Y0;travel to origin")
+        assert(not position.get_wipe_gcodes())
+        # undo, should create wipe gcodes
+        position.undo_update()
+        gcodes = position.get_wipe_gcodes()
+        pp.pprint(gcodes)
+        position.update("G1 X0 Y0;travel to origin")
+        position.update("G1 X1 Y1 E0.2; Extrude 0.2mm")
+        position.update("G1 X1 Y2 E0.2; Extrude 0.2mm")
+        gcodes = position.get_wipe_gcodes()
+        pp.pprint(gcodes)
 
-        # Initial test, should return false without any coordinates
-        self.assertFalse(position.has_position_error())
-        self.assertIsNone(position.position_error())
-        # home the axis and test
-        position.update(Commands.parse("G28"))
-        self.assertFalse(position.has_position_error())
-        self.assertIsNone(position.position_error())
+        position.update("G1 X0 Y0;travel to origin")
+        position.update("G1 X1 Y1 E0.2; Extrude 0.2mm")
+        position.update("G1 X1 Y2 E0.1; Extrude 0.1mm")
+        gcodes = position.get_wipe_gcodes()
+        pp.pprint(gcodes)
 
-        # X axis tests
-        # reset, set relative extruder and absolute xyz, home the axis and test again
-        position = Position(self.Settings, self.OctoprintPrinterProfile, False)
-        position.update(Commands.parse("M83"))
-        position.update(Commands.parse("G90"))
-        position.update(Commands.parse("G28"))
-        self.assertFalse(position.has_position_error())
-        self.assertIsNone(position.position_error())
-        # move out of bounds min
-        position.update(Commands.parse("G0 x-0.0001"))
-        self.assertTrue(position.has_position_error())
-        self.assertTrue(position.position_error() is not None)
-        # move back in bounds
-        position.update(Commands.parse("G0 x0.0"))
-        self.assertFalse(position.has_position_error())
-        self.assertIsNone(position.position_error())
-        # move to middle
-        position.update(Commands.parse("G0 x125"))
-        self.assertFalse(position.has_position_error())
-        self.assertIsNone(position.position_error())
-        # move to max
-        position.update(Commands.parse("G0 x250"))
-        self.assertFalse(position.has_position_error())
-        self.assertIsNone(position.position_error())
-        # move out of bounds max
-        position.update(Commands.parse("G0 x250.0001"))
-        self.assertTrue(position.has_position_error())
-        self.assertTrue(position.position_error() is not None)
+        # try absolute e
+        position.update("M82; absolute e")
+        position.update("G92 E0; reset e")
+        position.update("G1 X0 Y0;travel to origin")
+        position.update("G1 X1 Y1 E0.2; ")
+        position.update("G1 X1 Y2 E0.4; ")
+        gcodes = position.get_wipe_gcodes()
+        pp.pprint(gcodes)
 
-        # Y axis tests
-        # reset, set relative extruder and absolute xyz, home the axis and test again
-        position = Position(self.Settings, self.OctoprintPrinterProfile, False)
-        position.update(Commands.parse("M83"))
-        position.update(Commands.parse("G90"))
-        position.update(Commands.parse("G28"))
-        self.assertFalse(position.has_position_error())
-        self.assertIsNone(position.position_error())
-        # move out of bounds min
-        position.update(Commands.parse("G0 y-0.0001"))
-        self.assertTrue(position.has_position_error())
-        self.assertTrue(position.position_error() is not None)
-        # move back in bounds
-        position.update(Commands.parse("G0 y0.0"))
-        self.assertFalse(position.has_position_error())
-        self.assertIsNone(position.position_error())
-        # move to middle
-        position.update(Commands.parse("G0 y100"))
-        self.assertFalse(position.has_position_error())
-        self.assertIsNone(position.position_error())
-        # move to max
-        position.update(Commands.parse("G0 y200"))
-        self.assertFalse(position.has_position_error())
-        self.assertIsNone(position.position_error())
-        # move out of bounds max
-        position.update(Commands.parse("G0 y200.0001"))
-        self.assertTrue(position.has_position_error())
-        self.assertTrue(position.position_error() is not None)
+        position.update("G1 X0 Y0;travel to origin")
+        position.update("G92 E0; reset e")
+        position.update("G1 X1 Y1 E0.2; ")
+        position.update("G1 X1 Y2 E0.3; ")
+        gcodes = position.get_wipe_gcodes()
+        pp.pprint(gcodes)
 
-        # Z axis tests
-        # reset, home the axis and test again
-        # reset, set relative extruder and absolute xyz, home the axis and test again
-        position = Position(self.Settings, self.OctoprintPrinterProfile, False)
-        position.update(Commands.parse("M83"))
-        position.update(Commands.parse("G90"))
-        position.update(Commands.parse("G28"))
-        self.assertFalse(position.has_position_error())
-        self.assertIsNone(position.position_error())
-        # move out of bounds min
-        position.update(Commands.parse("G0 z-0.0001"))
-        self.assertTrue(position.has_position_error())
-        self.assertTrue(position.position_error() is not None)
-        # move back in bounds
-        position.update(Commands.parse("G0 z0.0"))
-        self.assertFalse(position.has_position_error())
-        self.assertIsNone(position.position_error())
-        # move to middle
-        position.update(Commands.parse("G0 z100"))
-        self.assertFalse(position.has_position_error())
-        self.assertIsNone(position.position_error())
-        # move to max
-        position.update(Commands.parse("G0 z200"))
-        self.assertFalse(position.has_position_error())
-        self.assertIsNone(position.position_error())
-        # move out of bounds max
-        position.update(Commands.parse("G0 z200.0001"))
-        self.assertTrue(position.has_position_error())
-        self.assertTrue(position.position_error() is not None)
+
+        # try relative XY
+        position.update("G1 X0 Y0;travel to origin")
+        position.update("G91; set xyz to relative mode")
+        position.update("G92 E0; reset e")
+        position.update("G1 X10 Y10; relative move +10x +10y")
+        position.update("G1 X1 Y1 E0.2; ")
+        position.update("G1 X1 Y1 E0.3; ")
+        gcodes = position.get_wipe_gcodes()
+        pp.pprint(gcodes)
+
+        # try offset X and Y
+
+        position.update("G90; set xyz to absolute mode")
+        position.update("M83; set e axis to absolute mode")
+        position.update("G1 X0 Y0; travel to origin")
+        position.update("G92 X10 Y10; offset by + 10")
+        position.update("G1 X11 Y11 E0.1; ")
+        position.update("G1 X12 Y10 E0.1; ")
+        gcodes = position.get_wipe_gcodes()
+        pp.pprint(gcodes)
+
+        print("finished")
+        # travel to initial position
+
+
+
 
     def test_reset(self):
         """Test init state."""
@@ -343,7 +337,7 @@ class TestPosition(unittest.TestCase):
         self.assertEqual(position.z(), 3)
         self.assertEqual(position.e(), 4)
 
-    def test_G90InfluencesExtruder_UpdatePosition(self):
+    def test_g90_influences_extruder_UpdatePosition(self):
         """Test G90 for machines where it influences the coordinate system of the extruder."""
         position = Position(self.Settings, self.OctoprintPrinterProfile, True)
         # Make sure the axis is homed
@@ -364,7 +358,7 @@ class TestPosition(unittest.TestCase):
         position.update_position(e=20)
         self.assertEqual(position.e(), 30)
 
-    def test_G90InfluencesExtruder_Update(self):
+    def test_g90_influences_extruder_Update(self):
         """Test G90 for machines where it influences the coordinate system of the extruder."""
         position = Position(self.Settings, self.OctoprintPrinterProfile, True)
         # Make sure the axis is homed
@@ -614,7 +608,7 @@ class TestPosition(unittest.TestCase):
         self.assertFalse(position.is_layer_change())
 
         # extrude again on same layer - Height Previous should now be updated, and
-        # IsLayerChange should be false
+        # is_layer_change should be false
         position.update(Commands.parse("G1 x0 y0 z0.20000 e1"))
         self.assertEqual(position.height(), .2)
         self.assertEqual(position.layer(), 2)
@@ -680,7 +674,7 @@ class TestPosition(unittest.TestCase):
     def test_ExtruderMovement(self):
         """Test the M82 and M83 command."""
         position = Position(self.Settings, self.OctoprintPrinterProfile, False)
-        previous_pos = Pos(self.Settings.current_printer(), self.OctoprintPrinterProfile)
+        previous_pos = Pos(self.Settings.profiles.current_printer(), self.OctoprintPrinterProfile)
         # test initial position
         self.assertIsNone(position.e())
         self.assertIsNone(position.is_extruder_relative())
@@ -690,7 +684,7 @@ class TestPosition(unittest.TestCase):
         position.update(Commands.parse("M83"))
 
         # test movement
-        previous_pos = Pos(self.Settings.current_printer(), self.OctoprintPrinterProfile, position.get_position())
+        previous_pos = Pos(self.Settings.profiles.current_printer(), self.OctoprintPrinterProfile, position.get_position())
         position.update(Commands.parse("G0 E100"))
         self.assertEqual(position.e(), 100)
         # this is somewhat reversed from what we do in the position.py module
@@ -700,39 +694,39 @@ class TestPosition(unittest.TestCase):
         self.assertEqual(position.e_relative_pos(previous_pos), -100)
 
         # switch to absolute movement
-        previous_pos = Pos(self.Settings.current_printer(), self.OctoprintPrinterProfile, position.get_position())
+        previous_pos = Pos(self.Settings.profiles.current_printer(), self.OctoprintPrinterProfile, position.get_position())
         position.update(Commands.parse("M82"))
         self.assertFalse(position.is_extruder_relative())
         self.assertEqual(position.e(), 100)
         self.assertEqual(position.e_relative_pos(previous_pos), 0)
 
         # move to -25
-        previous_pos = Pos(self.Settings.current_printer(), self.OctoprintPrinterProfile, position.get_position())
+        previous_pos = Pos(self.Settings.profiles.current_printer(), self.OctoprintPrinterProfile, position.get_position())
         position.update(Commands.parse("G0 E-25"))
         self.assertEqual(position.e(), -25)
         self.assertEqual(position.e_relative_pos(previous_pos), 125)
 
         # test movement to origin
-        previous_pos = Pos(self.Settings.current_printer(), self.OctoprintPrinterProfile, position.get_position())
+        previous_pos = Pos(self.Settings.profiles.current_printer(), self.OctoprintPrinterProfile, position.get_position())
         position.update(Commands.parse("G0 E0"))
         self.assertEqual(position.e(), 0)
         self.assertEqual(position.e_relative_pos(previous_pos), -25)
 
         # switch to relative position
-        previous_pos = Pos(self.Settings.current_printer(), self.OctoprintPrinterProfile, position.get_position())
+        previous_pos = Pos(self.Settings.profiles.current_printer(), self.OctoprintPrinterProfile, position.get_position())
         position.update(Commands.parse("M83"))
         position.update(Commands.parse("G0 e1.1"))
         self.assertEqual(position.e(), 1.1)
         self.assertEqual(position.e_relative_pos(previous_pos), -1.1)
 
         # move and test
-        previous_pos = Pos(self.Settings.current_printer(), self.OctoprintPrinterProfile, position.get_position())
+        previous_pos = Pos(self.Settings.profiles.current_printer(), self.OctoprintPrinterProfile, position.get_position())
         position.update(Commands.parse("G0 e1.1"))
         self.assertEqual(position.e(), 2.2)
         self.assertEqual(position.e_relative_pos(previous_pos), -1.1)
 
         # move and test
-        previous_pos = Pos(self.Settings.current_printer(), self.OctoprintPrinterProfile, position.get_position())
+        previous_pos = Pos(self.Settings.profiles.current_printer(), self.OctoprintPrinterProfile, position.get_position())
         position.update(Commands.parse("G0 e-2.2"))
         self.assertEqual(position.e(), 0)
         self.assertEqual(position.e_relative_pos(previous_pos), 2.2)
@@ -740,7 +734,7 @@ class TestPosition(unittest.TestCase):
     def test_zHop(self):
         """Test zHop detection."""
         # set zhop distance
-        self.Settings.current_printer().z_hop = .5
+        self.Settings.profiles.current_printer().z_hop = .5
         position = Position(self.Settings, self.OctoprintPrinterProfile, False)
 
         # test initial state
@@ -809,7 +803,6 @@ class TestPosition(unittest.TestCase):
         # x:119.9145519,y:113.33847,z:2.1
         # G1 X119.915 Y113.338 F7200
         position = Position(self.Settings, self.OctoprintPrinterProfile, False)
-        position.Printer.printer_position_confirmation_tolerance = .0051
         position.update(Commands.parse("M83"))
         position.update(Commands.parse("G90"))
         position.update(Commands.parse("G28"))
@@ -824,7 +817,7 @@ class TestPosition(unittest.TestCase):
         raise NotImplementedError
 
     @unittest.skip("Not yet implemented")
-    def test_extruder_axis_default_mode_absolute(self):
+    def test_extruder_axis_default_modoffset_e(self):
         # test e_axis_default_mode = 'absolute'
         raise NotImplementedError
 
@@ -839,7 +832,7 @@ class TestPosition(unittest.TestCase):
         raise NotImplementedError
 
     @unittest.skip("Not yet implemented")
-    def test_xyz_axis_default_mode_absolute(self):
+    def test_xyz_axis_default_modoffset_e(self):
         # test xyz_axes_default_mode = 'absolute'
         raise NotImplementedError
 

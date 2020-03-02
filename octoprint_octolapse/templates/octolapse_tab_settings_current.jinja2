@@ -22,168 +22,255 @@
 ##################################################################################
 -->
 <script type="text/html" id="octolapse-settings-current">
-    <a href="#"
-       data-bind="css: {'muted': !hasConfigIssues(), 'text-error': hasConfigIssues()}, octolapseToggle: { class_showing: 'fa-caret-down', class_hiding: 'fa-caret-right', container: '#octolapse_status_settings_current_panel', toggle_observable: current_settings_showing }">
-        <i data-bind="visible: hasConfigIssues" class="fa fa-exclamation"> </i>Current Settings <i class="fa fa-no-shadow fa-caret-down"></i>
-    </a>
+    <div class="row-fluid">
+        <div class="span12">
+            <a data-bind="css: {'muted': !hasConfigIssues(), 'text-error': hasConfigIssues()}, octolapseToggle: { class_showing: 'fa-caret-down', class_hiding: 'fa-caret-right', container: '#octolapse_status_settings_current_panel', toggle_observable: current_settings_showing }">
+                <i data-bind="visible: hasConfigIssues" class="fa fa-exclamation"> </i>Current Run Configuration&nbsp;<i class="fa fa-no-shadow fa-caret-down"></i>
+            </a>
+        </div>
+    </div>
     <div id="octolapse_status_settings_current_panel">
+        <div class="row-fluid">
+            <div class="span2 text-right">
+                <a data-bind="click: function() {openOctolapseSettings('printer');}"
+                   title="Open all printer settings.">
+                    Printer
+                </a>
+            </div>
+            <div class="span9">
+                <select id="octolapse_tab_printer_profile"
+                            class="input-block-level"
+                            data-bind="
+                           enable: Octolapse.Globals.is_admin() && !Octolapse.Status.is_timelapse_active() && Octolapse.Settings.is_loaded(),
+                           options: Octolapse.Status.printers_sorted,
+                           optionsText: 'name',
+                           optionsValue: 'guid',
+                           optionsAfterRender: setDescriptionAsTitle,
+                           value: Octolapse.Status.current_printer_profile_guid,
+                           event: {change: Octolapse.Status.defaultPrinterChanged},
+                           optionsCaption: 'Please select...',
+                           attr: {title: Octolapse.Status.getPrinterProfileTitle}">
+                </select>
+                <div data-bind="visible: !hasPrinterSelected()" class="text-error">
+                    <p data-bind="visible: hasPrinters()" class="text-error">
+                        No printer is selected.  Either select a printer from the drop down box, or add a new printer profile by clicking the plus sign to the right.
+                    </p>
+                    <p data-bind="visible: !hasPrinters()" class="text-error">
+                        No printer profiles are available.  You can add a new printer profile by clicking the plus sign to the right.
+                    </p>
+                </div>
+                <div data-bind="visible: !has_configured_printer_profile()" class="text-error">
+                    <p>The selected printer profile has not been configured. Please edit the profile and copy in your slicer settings.</p>
+                </div>
+            </div>
+            <div class="span1">
+                <a data-bind="visible: Octolapse.Globals.is_admin() && Octolapse.Status.current_printer_profile_guid() != null && Octolapse.Settings.is_loaded(), click: openCurrentPrinterProfile" title="Edit this printer profile">
+                    <i class="fa fa-pencil fa-2x"></i>
+                </a>
+                <a data-bind="visible: Octolapse.Globals.is_admin() && Octolapse.Status.current_printer_profile_guid() == null && Octolapse.Settings.is_loaded(), click: createNewPrinterProfile" title="Add a printer profile.">
+                    <i class="fa fa-plus fa-2x"></i>
+                </a>
+            </div>
+        </div>
+        <div class="row-fluid">
+            <div class="span2 text-right">
+                <a data-bind="click: function() {openOctolapseSettings('stabilization');}"
+                   title="Open all stabilization settings.">
+                    Stabilization
+                </a>
+            </div>
+            <div class="span9">
+                <select id="octolapse_tab_stabilization_profile"
+                        class="input-block-level"
+                        data-bind="
+                        enable: Octolapse.Globals.is_admin() && !Octolapse.Status.is_timelapse_active() && Octolapse.Settings.is_loaded(),
+                        options: Octolapse.Status.stabilizations_sorted,
+                        optionsText: 'name',
+                        optionsValue: 'guid',
+                        optionsAfterRender: setDescriptionAsTitle,
+                        event: {change: Octolapse.Status.defaultStabilizationChanged},
+                        value: Octolapse.Status.current_stabilization_profile_guid,
+                        attr: {title: Octolapse.Status.getStabilizationProfileTitle}">
+                </select>
 
-        <table class="table table-striped table-hover table-condensed table-hover octolapse-profiles">
-            <thead>
-            <tr>
-                <th class="profile_name">Profile</th>
-                <th class="profile_description">Name</th>
-                <th></th>
-            </tr>
-            </thead>
-            <tbody>
-            <tr>
-                <td>Printer</td>
-                <td>
-                    <select id="octolapse_tab_printer_profile"
-                            class="input-block-level"
-                            data-bind="
-                               enable: Octolapse.Globals.is_admin() && !Octolapse.Status.is_timelapse_active(),
-                               options: Octolapse.Status.printers_sorted,
-                               optionsText: 'name',
-                               optionsValue: 'guid',
-                               value: Octolapse.Status.current_printer_profile_guid,
-                               event: {change: Octolapse.Status.defaultPrinterChanged},
-                               optionsCaption: 'Please select...'">
-                    </select>
-                    <div data-bind="visible: !hasPrinterSelected()" class="text-error">
-                        <p>No printer is selected.</p>
-                    </div>
-                    <div data-bind="visible: !has_configured_printer_profile()" class="text-error">
-                        <p>The selected printer profile has not been configured. Please edit the profile and copy in your slicer settings.</p>
-                    </div>
-                </td>
-                <td>
-                    <a href="#" data-bind="visible: Octolapse.Globals.is_admin() && Octolapse.Status.current_printer_profile_guid() != null, click: openCurrentPrinterProfile">
-                        <i class="fa fa-gear fa-2x"></i>
-                    </a>
-                </td>
-            </tr>
-            <tr>
-                <td>Stabilization</td>
-                <td>
-                    <select id="octolapse_tab_stabilization_profile"
-                            class="input-block-level"
-                            data-bind="
-                                enable: Octolapse.Globals.is_admin() && !Octolapse.Status.is_timelapse_active(),
-                                options: Octolapse.Status.stabilizations_sorted,
-                                optionsText: 'name',
-                                optionsValue: 'guid',
-                                event: {change: Octolapse.Status.defaultStabilizationChanged},
-                                value: Octolapse.Status.current_stabilization_profile_guid"></select>
+            </div>
+            <div class="span1">
+                <a data-bind="visible: Octolapse.Globals.is_admin() && Octolapse.Status.current_stabilization_profile_guid() != null && Octolapse.Settings.is_loaded(), click: openCurrentStabilizationProfile"  title="Edit this stabilization profile">
+                    <i class="fa fa-pencil fa-2x"></i>
+                </a>
+            </div>
+        </div>
 
-                </td>
-                <td>
-                    <a href="#" data-bind="visible: Octolapse.Globals.is_admin() && Octolapse.Status.current_stabilization_profile_guid() != null, click: openCurrentStabilizationProfile">
-                        <i class="fa fa-gear fa-2x"></i>
-                    </a>
-                </td>
-            </tr>
-            <tr>
-                <td>Snapshot</td>
-                <td>
-                    <select id="octolapse_tab_snapshot_profile"
-                            class="input-block-level"
-                            data-bind="
-                                enable: Octolapse.Globals.is_admin() && !Octolapse.Status.is_timelapse_active(),
-                                options: Octolapse.Status.snapshots_sorted,
-                                optionsText: 'name',
-                                optionsValue: 'guid',
-                                event: {change: Octolapse.Status.defaultSnapshotChanged},
-                                value: Octolapse.Status.current_snapshot_profile_guid"></select>
-                </td>
-                <td>
-                    <a href="#" data-bind="visible: Octolapse.Globals.is_admin() && Octolapse.Status.current_snapshot_profile_guid() != null, click: openCurrentSnapshotProfile">
-                        <i class="fa fa-gear fa-2x"></i>
-                    </a>
-                </td>
-            </tr>
-            <tr>
-                <td>Rendering</td>
-                <td>
-                    <select id="octolapse_tab_rendering_profile"
-                            class="input-block-level"
-                            data-bind="
-                                enable: Octolapse.Globals.is_admin() && !Octolapse.Status.is_timelapse_active(),
-                                options: Octolapse.Status.renderings_sorted,
-                                optionsText: 'name',
-                                optionsValue: 'guid',
-                                event: {change: Octolapse.Status.defaultRenderingChanged},
-                                value: Octolapse.Status.current_rendering_profile_guid"></select>
-                </td>
-                <td class="text-right">
-                    <a href="#" data-bind="visible: Octolapse.Globals.is_admin() && Octolapse.Status.current_rendering_profile_guid() != null, click: openCurrentRenderingProfile">
-                        <i class="fa fa-gear fa-2x"></i>
-                    </a>
-                </td>
-            </tr>
-            <tr>
-                <td>
-                    Cameras
-                </td>
-                <td colspan="2">
-                    <div data-bind="template:'octolapse-tab-settings-current-cameras'"></div>
-                </td>
-            </tr>
-            <tr>
-                <td>Debug</td>
-                <td>
-                    <select id="octolapse_tab_debug_profile"
-                            class="input-block-level"
-                            data-bind="
-                                enable: Octolapse.Globals.is_admin(),
-                                options: Octolapse.Status.debug_sorted,
-                                optionsText: 'name',
-                                optionsValue: 'guid',
-                                event: {change: Octolapse.Status.defaultDebugProfileChanged},
-                                value: Octolapse.Status.current_debug_profile_guid"></select>
-                </td>
-                <td>
-                    <a href="#" data-bind="visible: Octolapse.Globals.is_admin() && Octolapse.Status.current_debug_profile_guid() != null, click: openCurrentDebugProfile">
-                        <i class="fa fa-gear fa-2x"></i>
-                    </a>
-                </td>
-            </tr>
-            </tbody>
-        </table>
-        <div class="row-fluid" data-bind="visible:Octolapse.Globals.is_admin">
-            <div class="span3 text-center">
-                <div>Trigger State</div>
-                <label class="toggle-switch-fa" data-bind="attr: {title: (!Octolapse.Globals.show_trigger_state_changes() ? 'Enable the info panel' : (!is_timelapse_active() ? 'The info panel will display when a timelapse is active.' : 'Disable the info panel') )}">
-                  <input type="checkbox" data-bind="checked: Octolapse.Globals.show_trigger_state_changes(), click: function() {toggleInfoPanel('show_trigger_state_changes');}" >
-                  <span class="fa-slider" data-bind="style: { 'background-color': (Octolapse.Globals.enabled() && is_timelapse_active()) ? '' : 'lightgray' }" ><i class="fa icon-circle fa-inverse"></i></span>
-                </label>
+        <div class="row-fluid">
+            <div class="span2 text-right">
+                <a data-bind="click: function() {openOctolapseSettings('trigger');}"
+                   title="Open all trigger settings.">
+                    Trigger
+                </a>
             </div>
-            <div class="span3 text-center">
-                <div>Extruder State</div>
-                <label class="toggle-switch-fa" data-bind="attr: {title: (!Octolapse.Globals.show_extruder_state_changes() ? 'Enable the info panel' : (!is_timelapse_active() ? 'The info panel will display when a timelapse is active.' : 'Disable the info panel') )}">
-                  <input type="checkbox" data-bind="checked: Octolapse.Globals.show_extruder_state_changes(), click: function() {toggleInfoPanel('show_extruder_state_changes');}" >
-                  <span class="fa-slider" data-bind="style: { 'background-color': (Octolapse.Globals.enabled() && is_timelapse_active()) ? '' : 'lightgray' }" ><i class="fa icon-circle fa-inverse"></i></span>
-                </label>
-            </div>
-            <div class="span3 text-center">
-                <div>Position State</div>
-                <label class="toggle-switch-fa" data-bind="attr: {title: (!Octolapse.Globals.show_position_state_changes() ? 'Enable the info panel' : (!is_timelapse_active() ? 'The info panel will display when a timelapse is active.' : 'Disable the info panel') )}">
-                  <input type="checkbox" data-bind="checked: Octolapse.Globals.show_position_state_changes(), click: function() {toggleInfoPanel('show_position_state_changes');}" >
-                  <span class="fa-slider" data-bind="style: { 'background-color': (Octolapse.Globals.enabled() && is_timelapse_active()) ? '' : 'lightgray'}" ><i class="fa icon-circle fa-inverse"></i></span>
-                </label>
-            </div>
-            <div class="span3 text-center">
-                <div>Position Changes</div>
-                <label class="toggle-switch-fa" data-bind="attr: {title: (!Octolapse.Globals.show_position_changes() ? 'Enable the info panel' : (!is_timelapse_active() ? 'The info panel will display when a timelapse is active.' : 'Disable the info panel') )}">
-                  <input type="checkbox" data-bind="checked: Octolapse.Globals.show_position_changes(), click: function() {toggleInfoPanel('show_position_changes');}" >
-                  <span class="fa-slider" data-bind="style: { 'background-color': (Octolapse.Globals.enabled() && is_timelapse_active()) ? '' : 'lightgray' }" ><i class="fa icon-circle fa-inverse"></i></span>
-                </label>
-            </div>
+            <div class="span9">
+                <select id="octolapse_tab_trigger_profile"
+                        class="input-block-level"
+                        data-bind="
+                        enable: Octolapse.Globals.is_admin() && !Octolapse.Status.is_timelapse_active() && Octolapse.Settings.is_loaded(),
+                        options: Octolapse.Status.triggers_sorted,
+                        optionsText: 'name',
+                        optionsValue: 'guid',
+                        optionsAfterRender: setDescriptionAsTitle,
+                        event: {change: Octolapse.Status.defaultTriggerChanged},
+                        value: Octolapse.Status.current_trigger_profile_guid,
+                        attr: {title: Octolapse.Status.getTriggerProfileTitle}">
+                </select>
 
+            </div>
+            <div class="span1">
+                <a data-bind="visible: Octolapse.Globals.is_admin() && Octolapse.Status.current_trigger_profile_guid() != null && Octolapse.Settings.is_loaded(), click: openCurrentTriggerProfile" title="Edit this trigger profile.">
+                    <i class="fa fa-pencil fa-2x"></i>
+                </a>
+            </div>
+        </div>
+
+        <div class="row-fluid">
+            <div class="span2 text-right">
+                <a data-bind="click: function() {openOctolapseSettings('rendering');}"
+                   title="Open all rendering settings.">
+                    Rendering
+                </a>
+            </div>
+            <div class="span9">
+                <select id="octolapse_tab_rendering_profile"
+                        class="input-block-level"
+                        data-bind="
+                        enable: Octolapse.Globals.is_admin() && !Octolapse.Status.is_timelapse_active() && Octolapse.Settings.is_loaded(),
+                        options: Octolapse.Status.renderings_sorted,
+                        optionsText: 'name',
+                        optionsValue: 'guid',
+                        optionsAfterRender: setDescriptionAsTitle,
+                        event: {change: Octolapse.Status.defaultRenderingChanged},
+                        value: Octolapse.Status.current_rendering_profile_guid,
+                        attr: {title: Octolapse.Status.getRenderingProfileTitle}">
+                </select>
+
+            </div>
+            <div class="span1">
+                <a data-bind="visible: Octolapse.Globals.is_admin() && Octolapse.Status.current_rendering_profile_guid() != null && Octolapse.Settings.is_loaded(), click: openCurrentRenderingProfile" title="Edit this rendering profile.">
+                    <i class="fa fa-pencil fa-2x"></i>
+                </a>
+            </div>
+        </div>
+        <div class="row-fluid">
+            <div data-bind="template:'octolapse-tab-settings-current-cameras'"></div>
+        </div>
+
+        <div class="row-fluid">
+            <div class="span2 text-right">
+                <a data-bind="click: function() {openOctolapseSettings('logging');}"
+                   title="Open all logging settings.">
+                    Logging
+                </a>
+            </div>
+            <div class="span9">
+                <select id="octolapse_tab_logging_profile"
+                    class="input-block-level"
+                    data-bind="
+                    enable: Octolapse.Globals.is_admin() && Octolapse.Settings.is_loaded(),
+                    options: Octolapse.Status.logging_profiles_sorted,
+                    optionsText: 'name',
+                    optionsValue: 'guid',
+                    optionsAfterRender: setDescriptionAsTitle,
+                    event: {change: Octolapse.Status.defaultLoggingProfileChanged},
+                    value: Octolapse.Status.current_logging_profile_guid,
+                        attr: {title: Octolapse.Status.getLoggingProfileTitle}">
+                </select>
+            </div>
+            <div class="span1">
+                <a data-bind="visible: Octolapse.Globals.is_admin() && Octolapse.Status.current_logging_profile_guid() != null && Octolapse.Settings.is_loaded(), click: openCurrentLoggingProfile" title="Edit this logging profile.">
+                    <i class="fa fa-pencil fa-2x"></i>
+                </a>
+            </div>
+        </div>
+        <div class="row-fluid">
+            <div class="span2 text-right">
+                <input type="checkbox" id="octolapse_test_mode_enabled" data-bind="checked: Octolapse.Globals.main_settings.test_mode_enabled(), click: function() {return Octolapse.Globals.main_settings.toggleTestMode();}" title="Enable or Disable Test Mode" style="display:none;">
+
+                <label for="octolapse_test_mode_enabled" data-bind="attr: {title: (is_timelapse_active() ? 'Test mode changes will take affect after the current print completes ' : (!Octolapse.Globals.main_settings.test_mode_enabled() ? 'Enable the test mode to prevent extrusion and warmup' : 'Disable test mode') )}">
+                    <span>Test Mode</span><br/>
+                </label>
+            </div>
+            <div class="span9">
+                <label for="octolapse_test_mode_enabled">
+                    <i class="fa fa-lg fa-toggle-off" data-bind="css: {'fa-toggle-on': Octolapse.Globals.main_settings.test_mode_enabled, 'fa-toggle-off': !Octolapse.Globals.main_settings.test_mode_enabled()}"></i>
+                    <span data-bind="text: (Octolapse.Globals.main_settings.test_mode_enabled() ? 'Enabled' : 'Disabled')"></span>
+                    <a class="octolapse_help" data-help-url="main_settings.is_test_mode.md" data-help-title="Test Mode - Prevent Extrusion and Warmup"/>
+                </label>
+            </div>
+            <div class="span1">
+
+            </div>
 
         </div>
+        <div class="row-fluid" data-bind="visible:Octolapse.Globals.is_admin">
+                <div data-bind="visible:!Octolapse.Status.is_real_time()" class="span12 text-right2 text-center">
+                    <input type="checkbox" id="octolapse-show_snapshot_plan_information" data-bind="checked: Octolapse.Globals.main_settings.show_snapshot_plan_information(), click: function() {toggleInfoPanel(Octolapse.Globals.main_settings.show_snapshot_plan_information,'show_snapshot_plan_information');}" style="display:none;">
+                    <label for="octolapse-show_snapshot_plan_information" data-bind="attr: {title: (!Octolapse.Globals.main_settings.show_snapshot_plan_information() ? 'Enable the info panel' : (!is_timelapse_active() ? 'The info panel will display when a timelapse is active.' : 'Disable the info panel') )}">
+                        <div>Snapshot Plan Info</div>
+
+                        <i class="fa fa-lg fa-toggle-off" data-bind="css: {'fa-toggle-on': Octolapse.Globals.main_settings.show_snapshot_plan_information, 'fa-toggle-off': !Octolapse.Globals.main_settings.show_snapshot_plan_information()}"></i>
+                        <span data-bind="text: (Octolapse.Globals.main_settings.show_snapshot_plan_information() ? 'Enabled' : 'Disabled')"></span>
+                        <a class="octolapse_help" data-help-url="main_settings.show_snapshot_plan_information.md" data-help-title="Show Snapshot Plan Information" />
+                    </label>
+                </div>
+                <div data-bind="visible:Octolapse.Status.is_real_time()" class="text-center">
+
+                    <div class="span3 text-center">
+                        <span data-bind="attr: {title: (!Octolapse.Globals.main_settings.show_trigger_state_changes() ? 'Enable the info panel' : (!is_timelapse_active() ? 'The info panel will display when a timelapse is active.' : 'Disable the info panel') )}">
+                            <input type="checkbox" id="octolapse-show-trigger-state-changes" data-bind="checked: Octolapse.Globals.main_settings.show_trigger_state_changes(), click: function() {toggleInfoPanel(Octolapse.Globals.main_settings.show_trigger_state_changes, 'show_trigger_state_changes');}"  style="display:none;">
+                            <label for="octolapse-show-trigger-state-changes">
+                                <div>Trigger State</div>
+                                <i class="fa fa-lg fa-toggle-off" data-bind="css: {'fa-toggle-on': Octolapse.Globals.main_settings.show_trigger_state_changes, 'fa-toggle-off': !Octolapse.Globals.main_settings.show_trigger_state_changes()}"></i>
+                                <span data-bind="text: (Octolapse.Globals.main_settings.show_trigger_state_changes() ? 'Enabled' : 'Disabled')"></span>
+                                <a class="octolapse_help" data-help-url="main_settings.show_trigger_state_changes.md" data-help-title="Show Trigger State Changes" />
+                            </label>
+                        </span>
+                    </div>
+                    <div class="span3 text-center">
+                        <span data-bind="attr: {title: (!Octolapse.Globals.main_settings.show_extruder_state_changes() ? 'Enable the info panel' : (!is_timelapse_active() ? 'The info panel will display when a timelapse is active.' : 'Disable the info panel') )}">
+                            <input type="checkbox" id="octolapse-show_extruder_state_changes" data-bind="checked: Octolapse.Globals.main_settings.show_extruder_state_changes(), click: function() {toggleInfoPanel(Octolapse.Globals.main_settings.show_extruder_state_changes, 'show_extruder_state_changes');}" style="display:none;">
+                            <label for="octolapse-show_extruder_state_changes">
+                                <div>Extruder State</div>
+                                <i class="fa fa-lg fa-toggle-off" data-bind="css: {'fa-toggle-on': Octolapse.Globals.main_settings.show_extruder_state_changes, 'fa-toggle-off': !Octolapse.Globals.main_settings.show_extruder_state_changes()}"></i>
+                                <span data-bind="text: (Octolapse.Globals.main_settings.show_extruder_state_changes() ? 'Enabled' : 'Disabled')"></span>
+                                <a class="octolapse_help" data-help-url="main_settings.show_extruder_state_changes.md" data-help-title="Show Extruder State Changes" />
+                            </label>
+                        </span>
+                    </div>
+                    <div class="span3 text-center">
+                        <span data-bind="attr: {title: (!Octolapse.Globals.main_settings.show_printer_state_changes() ? 'Enable the info panel' : (!is_timelapse_active() ? 'The info panel will display when a timelapse is active.' : 'Disable the info panel') )}">
+                            <input type="checkbox" id="octolapse-show_printer_state_changes" data-bind="checked: Octolapse.Globals.main_settings.show_printer_state_changes(), click: function() {toggleInfoPanel(Octolapse.Globals.main_settings.show_printer_state_changes, 'show_printer_state_changes');}" style="display:none;">
+                            <label for="octolapse-show_printer_state_changes">
+                                <div>Position State</div>
+                                <i class="fa fa-lg fa-toggle-off" data-bind="css: {'fa-toggle-on': Octolapse.Globals.main_settings.show_printer_state_changes, 'fa-toggle-off': !Octolapse.Globals.main_settings.show_printer_state_changes()}"></i>
+                                <span data-bind="text: (Octolapse.Globals.main_settings.show_printer_state_changes() ? 'Enabled' : 'Disabled')"></span>
+                                <a class="octolapse_help" data-help-url="main_settings.show_printer_state_changes.md" data-help-title="Show Position State Changes" />
+                            </label>
+                        </span>
+                    </div>
+                    <div class="span3 text-center">
+                        <span data-bind="attr: {title: (!Octolapse.Globals.main_settings.show_position_changes() ? 'Enable the info panel' : (!is_timelapse_active() ? 'The info panel will display when a timelapse is active.' : 'Disable the info panel') )}">
+                            <input type="checkbox" id="octolapse_show_position_changes" data-bind="checked: Octolapse.Globals.main_settings.show_position_changes(), click: function() {toggleInfoPanel(Octolapse.Globals.main_settings.show_position_changes, 'show_position_changes');}" style="display:none">
+                            <label for="octolapse_show_position_changes">
+                                <div>Position Changes</div>
+                                <i class="fa fa-lg fa-toggle-off" data-bind="css: {'fa-toggle-on': Octolapse.Globals.main_settings.show_position_changes, 'fa-toggle-off': !Octolapse.Globals.main_settings.show_position_changes()}"></i>
+                                <span data-bind="text: (Octolapse.Globals.main_settings.show_position_changes() ? 'Enabled' : 'Disabled')"></span>
+                                <a class="octolapse_help" data-help-url="main_settings.show_position_changes.md" data-help-title="Show Position Changes" />
+                            </label>
+                        </span>
+                    </div>
+                </div>
+            </div>
+
     </div>
 </script>
 
 {% include "octolapse_tab_settings_current_cameras.jinja2" %}
+

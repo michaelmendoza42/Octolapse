@@ -55,7 +55,7 @@ $(function() {
             if(self.profileTypeName == 'Printer')
             {
                 var current_printer = self.currentProfile();
-                if(current_printer!=null && !current_printer.saved_by_user_flag())
+                if(current_printer!=null && !current_printer.has_been_saved_by_user())
                     return false;
                 return true;
             }
@@ -63,7 +63,7 @@ $(function() {
         });
 
         // Created a sorted observable
-        self.profiles_sorted = ko.computed(function() { return Octolapse.nameSort(self.profiles) });
+        self.profiles_sorted = ko.computed(function() { return Octolapse.observableNameSort(self.profiles) });
 
         /*
             Octoprint Viewmodel Events
@@ -113,7 +113,18 @@ $(function() {
 
                 },
                 error: function(XMLHttpRequest, textStatus, errorThrown) {
-                    alert("Unable to add/update the " + self.profileTypeName() +" profile!.  Status: " + textStatus + ".  Error: " + errorThrown);
+                    var message = "Unable to add/update the " + self.profileTypeName() +" profile!.  Status: " + textStatus + ".  Error: " + errorThrown;
+                    var options = {
+                        title: 'Add/Update Profile Error',
+                        text: message,
+                        type: 'error',
+                        hide: false,
+                        addclass: "octolapse",
+                        desktop: {
+                            desktop: true
+                        }
+                    };
+                    Octolapse.displayPopup(options);
                 }
             });
         };
@@ -131,21 +142,40 @@ $(function() {
                     success: function (returnValue) {
                         if(returnValue.success)
                             self.profiles.remove(self.getProfileByGuid(guid));
-                        else
-                            alert("Unable to remove the " + currentProfile.name() +" profile!.  Error: " + returnValue.error);
-
-                        // close modal dialog.
-
+                        else {
+                            var message = "Unable to remove the " + currentProfile.name() + " profile!.  Error: " + returnValue.error;
+                            var options = {
+                                title: 'Profile Delete Error',
+                                text: message,
+                                type: 'error',
+                                hide: false,
+                                addclass: "octolapse",
+                                desktop: {
+                                    desktop: true
+                                }
+                            };
+                            Octolapse.displayPopup(options);
+                        }
                     },
                     error: function (XMLHttpRequest, textStatus, errorThrown) {
-                        alert("Unable to remove the " + currentProfile.name() + " profile!.  Status: " + textStatus + ".  Error: " + errorThrown);
+                        var message = "Unable to remove the " + currentProfile.name() + " profile!.  Status: " + textStatus + ".  Error: " + errorThrown;
+                        var options = {
+                            title: 'Profile Delete Error',
+                            text: message,
+                            type: 'error',
+                            hide: false,
+                            addclass: "octolapse",
+                            desktop: {
+                                desktop: true
+                            }
+                        };
+                        Octolapse.displayPopup(options);
                     }
                 });
             }
         };
         //Mark a profile as the current profile.
         self.setCurrentProfile = function(guid) {
-            var currentProfile = self.getProfileByGuid(guid)
             var data = { "client_id" : Octolapse.Globals.client_id,'guid': ko.toJS(guid), 'profileType': self.profileTypeName() };
             $.ajax({
                 url: "./plugin/octolapse/" + self.setCurrentProfilePath,
@@ -159,7 +189,36 @@ $(function() {
                     self.current_profile_guid(result.guid);
                 },
                 error: function(XMLHttpRequest, textStatus, errorThrown) {
-                    alert("Unable to set the current " + currentProfile.name() +" profile!.  Status: " + textStatus + ".  Error: " + errorThrown);
+                    try {
+                        var currentProfile = self.getProfileByGuid(guid);
+                        var message = "Unable to set the current " + currentProfile.name() +" profile!.  Status: " + textStatus + ".  Error: " + errorThrown;
+                        var options = {
+                            title: 'Profile Selection Failed',
+                            text: message,
+                            type: 'error',
+                            hide: false,
+                            addclass: "octolapse",
+                            desktop: {
+                                desktop: true
+                            }
+                        };
+                        Octolapse.displayPopup(options);
+                    }
+                    catch (e) {
+                        var message = "Unable to set the current " + self.profileTypeName() +" profile!.  Status: " + textStatus + ".  Error: " + errorThrown;
+                        var options = {
+                            title: 'Profile Selection Failed',
+                            text: message,
+                            type: 'error',
+                            hide: false,
+                            addclass: "octolapse",
+                            desktop: {
+                                desktop: true
+                            }
+                        };
+                        Octolapse.displayPopup(options);
+                    }
+
                 }
             });
         };
@@ -191,7 +250,18 @@ $(function() {
                 }
             );
             if (index < 0) {
-                alert("Could not find a " + self.profileTypeName() +" profile with the guid:" + guid + "!");
+                var message = "Could not find a " + self.profileTypeName() +" profile with the guid:" + guid + "!";
+                var options = {
+                    title: 'Profile Not Found',
+                    text: message,
+                    type: 'error',
+                    hide: false,
+                    addclass: "octolapse",
+                    desktop: {
+                        desktop: true
+                    }
+                };
+                Octolapse.displayPopup(options);
                 return null;
             }
             return self.profiles()[index];
@@ -230,6 +300,7 @@ $(function() {
         self.toggle = Octolapse.Toggle;
 
         self.showAddEditDialog = function(guid, isCopy) {
+            self.setIsClickable(true);
             //console.log("octolapse.profiles.js - Showing add edit dialog.")
             isCopy = isCopy || false;
             var title = null;
@@ -261,9 +332,9 @@ $(function() {
                 warning = null;
                 if(Octolapse.Status.is_timelapse_active())
                 {
-                     if(newProfile.profileTypeName() == 'Debug')
+                     if(newProfile.profileTypeName() == 'Logging')
                      {
-                        warning = "A timelapse is active.  All debug settings will IMMEDIATELY take effect, except for 'Test Mode' which will not take effect until the next print.";
+                        warning = "A timelapse is active.  All logging settings will IMMEDIATELY take effect.";
                      }
                      else
                         warning = "A timelapse is active.  Any changes made here will NOT take effect until the next print.";
@@ -274,6 +345,13 @@ $(function() {
             addEditObservable(newProfile);
 
             Octolapse.Settings.showAddEditDialog({ "profileObservable": addEditObservable, "title": title, "templateName": self.addEditTemplateName, "validationRules": JSON.parse(JSON.stringify(self.profileValidationRules)), 'warning':warning },this);
+        };
+
+        self.setIsClickable = function(is_clickable){
+            if (!is_clickable)
+                $("#octolapse_add_edit_profile_dialog div.modal-content").addClass("octolapse_unclickable");
+            else
+                $("#octolapse_add_edit_profile_dialog div.modal-content").removeClass("octolapse_unclickable");
         };
         /*
             Set data prior to bindings

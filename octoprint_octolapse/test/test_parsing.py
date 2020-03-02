@@ -23,7 +23,7 @@
 import time
 import unittest
 
-from octoprint_octolapse.gcode_parser import Commands, Response
+from octoprint_octolapse.gcode_commands import Commands, Response
 
 
 class TestParsing(unittest.TestCase):
@@ -439,6 +439,36 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(parsed.cmd, "M105")
         self.assertDictEqual(parsed.parameters, {})
 
+    def test_t(self):
+        gcode = "T?"
+        parsed = Commands.parse(gcode)
+        self.assertEqual(parsed.cmd, "T")
+        self.assertDictEqual(parsed.parameters, {"T": None})
+
+        gcode = " T? "
+        parsed = Commands.parse(gcode)
+        self.assertEqual(parsed.cmd, "T")
+        self.assertDictEqual(parsed.parameters, {"T":None})
+
+        gcode = " T ? "
+        parsed = Commands.parse(gcode)
+        self.assertEqual(parsed.cmd, "T")
+        self.assertDictEqual(parsed.parameters, {"T": None})
+
+        gcode = "T1;"
+        parsed = Commands.parse(gcode)
+        self.assertEqual(parsed.cmd, "T")
+        self.assertDictEqual(parsed.parameters, {"T": 1})
+
+        gcode = "T 1 ;"
+        parsed = Commands.parse(gcode)
+        self.assertEqual(parsed.cmd, "T")
+        self.assertDictEqual(parsed.parameters, {"T": 1})
+
+        gcode = "T 1.11 ;"
+        parsed = Commands.parse(gcode)
+        self.assertEqual(parsed.cmd, "T")
+        self.assertDictEqual(parsed.parameters, {"T": 1})
 #    def test_performance(self):
 #        num_tests = 1000
 #

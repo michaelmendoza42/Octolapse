@@ -20,21 +20,32 @@
 # You can contact the author either through the git-hub repository, or at the
 # following email address: FormerLurker@pm.me
 ##################################################################################
-
+from __future__ import unicode_literals
 import math
+import uuid
 import ntpath
 import os
 import re
 import subprocess
 import sys
 import time
+import urllib
 import traceback
 import threading
-import psutil
+import json
+import shutil
+import errno
+import requests
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
+from slugify import Slugify
+# create the module level logger
+from octoprint_octolapse.log import LoggingConfigurator
+logging_configurator = LoggingConfigurator()
+logger = logging_configurator.get_logger(__name__)
+
 from threading import Timer
-
-FLOAT_MATH_EQUALITY_RANGE = 0.000001
-
+FLOAT_MATH_EQUALITY_RANGE = 0.0000001
 
 def get_float(value, default):
     if value is None:
@@ -82,7 +93,7 @@ def get_string(value, default):
 
 # global for bitrate regex
 octoprint_ffmpeg_bitrate_regex = re.compile(
-    "^\d+[KkMm]$", re.IGNORECASE)
+    r"^\d+[KkMm]$", re.IGNORECASE)
 
 
 def get_bitrate(value, default):
@@ -100,49 +111,229 @@ def is_sequence(arg):
             hasattr(arg, "__iter__"))
 
 
-def get_filename_from_full_path(path):
+_SLUGIFY = Slugify()
+_SLUGIFY.safe_chars = "-_.()[] "
 
+
+def sanitize_filename(filename):
+    if filename is None:
+        return None
+    if u"/" in filename or u"\\" in filename:
+        raise ValueError("name must not contain / or \\")
+
+    result = _SLUGIFY(filename).replace(u" ", u"_")
+    if result and result != u"." and result != u".." and result[0] == u".":
+        # hidden files under *nix
+        result = result[1:]
+    return result
+
+
+def split_all(path):
+    allparts = []
+    while 1:
+        parts = os.path.split(path)
+        if parts[0] == path:  # sentinel for absolute paths
+            allparts.insert(0, parts[0])
+            break
+        elif parts[1] == path:  # sentinel for relative paths
+            allparts.insert(0, parts[1])
+            break
+        else:
+            path = parts[0]
+            allparts.insert(0, parts[1])
+    return allparts
+
+
+def get_directory_from_full_path(path):
+    return os.path.dirname(path)
+
+
+def get_filename_from_full_path(path):
     basename = ntpath.basename(path)
     head, tail = ntpath.split(basename)
     file_name = tail or ntpath.basename(head)
-    return os.path.splitext(file_name)[0]
+    split_filename = os.path.splitext(file_name)
+    if len(split_filename) > 0:
+        return split_filename[0]
+    return ""
+
+
+def remove_extension_from_filename(filename):
+    return os.path.splitext(filename)[0]
+
+
+def get_extension_from_full_path(path):
+    return get_extension_from_filename(ntpath.basename(path))
+
+
+def get_extension_from_filename(filename):
+    head, tail = ntpath.split(filename)
+    file_name = tail or ntpath.basename(head)
+    split_filename = os.path.splitext(file_name)
+    if len(split_filename) > 1:
+        extension = split_filename[1]
+        if len(split_filename) > 1:
+            return extension[1:]
+    return ""
+
+
+def get_collision_free_filepath(path):
+    filename = get_filename_from_full_path(path)
+    directory = get_directory_from_full_path(path)
+    extension = get_extension_from_full_path(path)
+
+    original_filename = filename
+    file_number = 0
+    # Check to see if the file exists, if it does add a number to the end and continue
+    while os.path.isfile(
+        os.path.join(
+            directory,
+            "{0}.{1}".format(filename, extension)
+        )
+    ):
+        file_number += 1
+        filename = "{0}_{1}".format(original_filename, file_number)
+
+    return os.path.join(directory, "{0}.{1}".format(filename, extension))
+
+
+def greater_than_or_close(a, b, abs_tol):
+    return a - b > abs_tol
+
+
+def greater_than(a, b):
+    return a - b > FLOAT_MATH_EQUALITY_RANGE
+
+
+def less_than(a, b):
+    return b - a > FLOAT_MATH_EQUALITY_RANGE
+
+
+def less_than_or_equal(a, b):
+    return a < b or is_equal(a, b)
+
+
+def greater_than_or_equal(a, b):
+    return a > b or is_equal(a, b)
+
+
+def is_equal(a,b):
+    return a - b < FLOAT_MATH_EQUALITY_RANGE
+
+
+def less_than_or_close(a, b, abs_tol):
+    return a - b < abs_tol
+
+
+def is_approximately_zero(a):
+    return abs(a) <= FLOAT_MATH_EQUALITY_RANGE
 
 
 def is_close(a, b, abs_tol=0.01000):
     return abs(a - b) <= abs_tol
 
 
+def round_to_float_equality_range(n):
+    return (n * 10000000 + 0.00000005)//1 / 10000000.0
+
+
 def round_to(n, precision):
-    correction = 0.5 if n >= 0 else -0.5
-    return int(n / precision + correction) * precision
+    return int(n / precision + (0.5 if n >= 0 else -0.5)) * precision
 
 
-def get_temp_snapshot_driectory_template():
-    return "{0}{1}{2}{3}".format("{DATADIRECTORY}", os.sep, "tempsnapshots", os.sep)
+def round_to_value(value, rounding_increment=0.0000001):
+    return round(value / rounding_increment) * rounding_increment
 
 
-def get_snapshot_directory(data_directory):
-    return "{0}{1}{2}{3}".format(data_directory, os.sep, "snapshots", os.sep)
+def round_up(value):
+    return -(-value // 1.0)
 
 
-def get_snapshot_filename_template():
-    return os.path.join("{FILENAME}")
+_snapshot_archive_default_directory = "snapshot_archive"
 
 
-def get_rendering_directory_from_data_directory(data_directory):
-    return get_rendering_directory_template().replace("{DATADIRECTORY}", data_directory)
+def get_default_snapshot_archive_directory_name():
+    return _snapshot_archive_default_directory
 
 
-def get_latest_snapshot_download_path(data_directory, camera_guid):
-    return "{0}{1}".format(get_snapshot_directory(data_directory), "latest_{0}.jpeg".format(camera_guid))
+_temporary_snapshot_subdirectory = "octolapse_snapshots_tmp"
 
 
-def get_latest_snapshot_thumbnail_download_path(data_directory, camera_guid):
-    return "{0}{1}".format(get_snapshot_directory(data_directory), "latest_thumb_{0}.jpeg".format(camera_guid))
+def get_temporary_snapshot_directory(temporary_directory):
+    return os.path.join(temporary_directory, _temporary_snapshot_subdirectory)
+
+
+def get_temporary_snapshot_job_path(temporary_directory, job_guid):
+    return os.path.join(
+            get_temporary_snapshot_directory(temporary_directory),
+            job_guid)
+
+
+def get_temporary_snapshot_job_camera_path(temporary_directory, job_guid, camera_guid):
+    return os.path.join(
+            get_temporary_snapshot_job_path(temporary_directory, job_guid),
+            camera_guid)
+
+
+_temporary_rendering_subdirectory = "octolapse_rendering_tmp"
+
+
+def get_temporary_rendering_directory(temporary_directory):
+    return os.path.join(temporary_directory, _temporary_rendering_subdirectory)
+
+
+_temporary_archive_subdirectory = "octolapse_archive_tmp"
+def get_temporary_archive_directory(temporary_directory):
+    return os.path.join(temporary_directory, _temporary_archive_subdirectory)
+
+
+def get_temporary_archive_path(temporary_directory):
+    file_name = "{0}.zip".format(uuid.uuid4())
+    return os.path.join(get_temporary_archive_directory(temporary_directory), file_name)
+
+
+snapshot_archive_extension = "zip"
+
+
+def get_snapshot_archive_filename(rendering_filename):
+    return "{0}.{1}".format(rendering_filename, snapshot_archive_extension)
+
+
+no_archive_filename = "no-archive.octolapse"
+
+
+def create_no_archive_file(temporary_directory, job_guid, camera_guid):
+    camera_job_directory = get_temporary_snapshot_job_camera_path(temporary_directory, job_guid, camera_guid)
+    # create the directory if it does not exist
+    if not os.path.isdir(camera_job_directory):
+        os.makedirs(camera_job_directory)
+
+    # create the no archive file path
+    no_archive_file_path = os.path.join(camera_job_directory, no_archive_filename)
+    # create the file
+    with open(no_archive_file_path, mode='w'):
+        pass  # nothing to do, just create the file
+
+
+def has_no_archive_file(temporary_directory, job_guid, camera_guid):
+    camera_job_directory = get_temporary_snapshot_job_camera_path(temporary_directory, job_guid, camera_guid)
+    no_archive_file_path = os.path.join(camera_job_directory, no_archive_filename)
+    return os.path.isfile(no_archive_file_path)
+
+def get_latest_snapshot_download_path(temporary_directory, camera_guid, base_folder=None):
+    if (not camera_guid or camera_guid == "undefined") and base_folder:
+        return get_images_download_path(base_folder, "no-camera-selected.png")
+    return os.path.join(get_temporary_snapshot_directory(temporary_directory), "latest_{0}.jpeg".format(camera_guid))
+
+
+def get_latest_snapshot_thumbnail_download_path(temporary_directory, camera_guid, base_folder=None):
+    if (not camera_guid or camera_guid == "undefined") and base_folder:
+        return get_images_download_path(base_folder, "no-camera-selected.png")
+    return os.path.join(get_temporary_snapshot_directory(temporary_directory), "latest_thumb_{0}.jpeg".format(camera_guid))
 
 
 def get_images_download_path(base_folder, file_name):
-    return "{0}{1}data{2}{3}{4}{5}".format(base_folder, os.sep, os.sep, "Images", os.sep, file_name)
+    return os.path.join(base_folder, "data", "Images", file_name)
 
 
 def get_error_image_download_path(base_folder):
@@ -154,7 +345,7 @@ def get_no_snapshot_image_download_path(base_folder):
 
 
 def get_rendering_directory_template():
-    return "{0}{1}{2}{3}".format("{DATADIRECTORY}", os.sep, "timelapses", os.sep)
+    return os.path.join("{DATADIRECTORY}", "timelapses")
 
 
 def get_rendering_base_filename_template():
@@ -171,23 +362,56 @@ def get_rendering_base_filename(print_name, print_start_time, print_end_time=Non
     file_template = file_template.replace(
         "{DATETIMESTAMP}", time.strftime("%Y%m%d%H%M%S", time.localtime(time.time())))
     file_template = file_template.replace(
-        "{PRINTSTARTTIME}", time.strftime("%Y%m%d%H%M%S", time.localtime(print_start_time)))
-    if print_end_time is not None:
-        file_template = file_template.replace(
-            "{PRINTENDTIME}", time.strftime("%Y%m%d%H%M%S", time.localtime(print_end_time)))
+        "{PRINTSTARTTIME}",
+        "UNKNOWN" if not print_start_time else time.strftime("%Y%m%d%H%M%S", time.localtime(print_start_time))
+    )
+    file_template = file_template.replace(
+        "{PRINTENDTIME}",
+        "UNKNOWN" if not print_end_time else time.strftime("%Y%m%d%H%M%S", time.localtime(print_end_time))
+    )
 
     return file_template
 
 
-def get_snapshot_filename(print_name, print_start_time, snapshot_number):
-    file_template = get_snapshot_filename_template() \
-        .format(FILENAME=get_string(print_name, ""),
-                DATETIMESTAMP="{0:d}".format(math.trunc(round(time.time(), 2) * 100)),
-                PRINTSTARTTIME="{0:d}".format(math.trunc(round(print_start_time, 2) * 100)))
-    return "{0}{1}.{2}".format(file_template, format_snapshot_number(snapshot_number), "jpg")
+snapshot_file_extensions = ["jpg"]
 
 
-SnapshotNumberFormat = "%06d"
+default_snapshot_extension = snapshot_file_extensions[0]
+
+
+def is_valid_snapshot_extension(extension):
+    return extension.lower() in snapshot_file_extensions
+
+
+temporary_extension = "tmp"
+
+
+def is_valid_temporary_extension(extension):
+    return extension.lower() == temporary_extension
+
+
+def get_snapshot_filename(print_name, snapshot_number):
+    return "{0}{1}.{2}".format(print_name, format_snapshot_number(snapshot_number), default_snapshot_extension)
+
+
+def get_pre_roll_snapshot_filename(print_name, snapshot_number):
+    return "{0}{1}_{2}.{3}".format(
+        print_name,
+        format_snapshot_number(snapshot_number),
+        format_snapshot_number(snapshot_number),
+        "jpg")
+
+SnaphotNumberDigits = 6
+SnapshotNumberFormat = "%0{0}d".format(SnaphotNumberDigits)
+
+
+def get_snapshot_number_from_path(path):
+    try:
+        if path.upper().endswith(".JPG") and len(path) > SnaphotNumberDigits + 4:
+            return int(path[len(path)-SnaphotNumberDigits-4:len(path)-4])
+    except ValueError:
+        pass
+    return -1
 
 
 def format_snapshot_number(number):
@@ -198,31 +422,6 @@ def format_snapshot_number(number):
     return number
 
 
-def get_snapshot_temp_directory(data_directory):
-    directory_template = get_temp_snapshot_driectory_template()
-    directory_template = directory_template.replace(
-        "{DATADIRECTORY}", data_directory)
-
-    return directory_template
-
-
-def get_rendering_directory(data_directory, print_name, print_start_time, output_extension, print_end_time=None):
-    directory_template = get_rendering_directory_template()
-    directory_template = directory_template.replace(
-        "{FILENAME}", get_string(print_name, ""))
-    directory_template = directory_template.replace(
-        "{OUTPUTFILEEXTENSION}", get_string(output_extension, ""))
-    directory_template = directory_template.replace("{PRINTSTARTTIME}",
-                                                    "{0:d}".format(math.trunc(round(print_start_time, 2) * 100)))
-    if print_end_time is not None:
-        directory_template = directory_template.replace("{PRINTENDTIME}",
-                                                        "{0:d}".format(math.trunc(round(print_end_time, 2) * 100)))
-    directory_template = directory_template.replace(
-        "{DATADIRECTORY}", data_directory)
-
-    return directory_template
-
-
 def seconds_to_hhmmss(seconds):
     hours = seconds // (60 * 60)
     seconds %= (60 * 60)
@@ -231,29 +430,20 @@ def seconds_to_hhmmss(seconds):
     return "%02i:%02i:%02i" % (hours, minutes, seconds)
 
 
-# class SafeDict(dict):
-#     def __init__(self, **entries):
-#         super(SafeDict, self).__init__(**entries)
-#         self.__dict__.update(entries)
-#         index = 0
-#
-#         for key in self.keys():
-#             self.keys[index] = str(key)
-#             index += 1
-#
-#     def __missing__(self, key):
-#         return '{' + key + '}'
-
-
-def get_currently_printing_filename(octoprint_printer):
+def get_currently_printing_file_path(octoprint_printer):
     if octoprint_printer is not None:
         current_job = octoprint_printer.get_current_job()
         if current_job is not None and "file" in current_job:
             current_job_file = current_job["file"]
             if "path" in current_job_file and "origin" in current_job_file:
-                current_file_path = current_job_file["path"]
-                if current_file_path is not None:
-                    return get_filename_from_full_path(current_file_path)
+                return current_job_file["path"]
+    return None
+
+
+def get_currently_printing_filename(octoprint_printer):
+    file_path = get_currently_printing_file_path(octoprint_printer)
+    if file_path is not None:
+        return get_filename_from_full_path(file_path)
     return ""
 
 # not sure if we need this
@@ -270,83 +460,41 @@ def coordinate_to_offset_position(coordinate, offset):
     return coordinate - offset
 
 
-def is_in_bounds(bounding_box, x=None, y=None, z=None):
+def is_in_bounds(bounding_box, x, y, z):
     # Determines if the given X,Y,Z coordinate is within
     # the bounding box of the printer, as determined by
     # the octoprint configuration
     # if no coordinates are give, return false
     if x is None and y is None and z is None:
         return False
-
-    min_x = bounding_box['min_x']
-    max_x = bounding_box['max_x']
-    min_y = bounding_box['min_y']
-    max_y = bounding_box['max_y']
-    min_z = bounding_box['min_z']
-    max_z = bounding_box['max_z']
-
-    x_in_bounds = x is None or min_x <= x <= max_x
-    y_in_bounds = y is None or min_y <= y <= max_y
-    z_in_bounds = z is None or min_z <= z <= max_z
-
+    x_in_bounds = x is None or bounding_box['min_x'] <= x <= bounding_box['max_x']
+    y_in_bounds = y is None or bounding_box['min_y'] <= y <= bounding_box['max_y']
+    z_in_bounds = z is None or bounding_box['min_z'] <= z <= bounding_box['max_z']
     return x_in_bounds and y_in_bounds and z_in_bounds
 
 
 def get_closest_in_bounds_position(bounding_box, x=None, y=None, z=None):
-    min_x = bounding_box['min_x']
-    max_x = bounding_box['max_x']
-    min_y = bounding_box['min_y']
-    max_y = bounding_box['max_y']
-    min_z = bounding_box['min_z']
-    max_z = bounding_box['max_z']
+    # Todo:  Make sure circular beds work
 
-    def clamp(v, v_min, v_max):
-        """Limits a value to lie between (or equal to) v_min and v_max."""
-        return None if v is None else min(max(v, v_min), v_max)
+    if bounding_box["bed_type"] == 'rectangular':
+        min_x = bounding_box['min_x']
+        max_x = bounding_box['max_x']
+        min_y = bounding_box['min_y']
+        max_y = bounding_box['max_y']
+        min_z = bounding_box['min_z']
+        max_z = bounding_box['max_z']
 
-    c_x = clamp(x, min_x, max_x)
-    c_y = clamp(y, min_y, max_y)
-    c_z = clamp(z, min_z, max_z)
+        def clamp(v, v_min, v_max):
+            """Limits a value to lie between (or equal to) v_min and v_max."""
+            return None if v is None else min(max(v, v_min), v_max)
 
-    return {'X': c_x, 'Y': c_y, 'Z': c_z}
+        c_x = clamp(x, min_x, max_x)
+        c_y = clamp(y, min_y, max_y)
+        c_z = clamp(z, min_z, max_z)
 
-
-def get_bounding_box(octolapse_printer_profile, octoprint_printer_profile):
-    # get octolapse min and max
-    if octolapse_printer_profile.override_octoprint_print_volume:
-        min_x = octolapse_printer_profile.min_x
-        max_x = octolapse_printer_profile.max_x
-        min_y = octolapse_printer_profile.min_y
-        max_y = octolapse_printer_profile.max_y
-        min_z = octolapse_printer_profile.min_z
-        max_z = octolapse_printer_profile.max_z
+        return {'X': c_x, 'Y': c_y, 'Z': c_z}
     else:
-        volume = octoprint_printer_profile["volume"]
-        custom_box = volume["custom_box"]
-        # see if we have a custom bounding box
-        if custom_box:
-            min_x = custom_box["x_min"]
-            max_x = custom_box["x_max"]
-            min_y = custom_box["y_min"]
-            max_y = custom_box["y_max"]
-            min_z = custom_box["z_min"]
-            max_z = custom_box["z_max"]
-        else:
-            min_x = 0
-            max_x = volume["width"]
-            min_y = 0
-            max_y = volume["depth"]
-            min_z = 0
-            max_z = volume["height"]
-
-    return {
-        "min_x": min_x,
-        "max_x": max_x,
-        "min_y": min_y,
-        "max_y": max_y,
-        "min_z": min_z,
-        "max_z": max_z
-    }
+        raise ValueError("We've not implemented circular bed stuff yet!")
 
 
 def get_intersections_circle(x1, y1, x2, y2, c_x, c_y, c_radius):
@@ -489,211 +637,361 @@ def get_intersections_rectangle(x1, y1, x2, y2, rect_x1, rect_y1, rect_x2, rect_
         return False
 
 
+def get_system_fonts(base_directory):
+    """Retrieves a list of fonts for any operating system. Note that this may not be a complete list of fonts
+       discoverable on the system.
+       :returns A list of filepaths to fonts available on the system."""
 
-def exception_to_string(e):
-    trace_back = sys.exc_info()[2]
-    if trace_back is None:
-        return str(e)
-    tb_lines = traceback.format_exception(e.__class__, e, trace_back)
-    return ''.join(tb_lines)
+    font_paths = []
+    font_names = set()
+    # first add all of our supplied fonts
+    default_font_path = os.path.join(base_directory, "data", "fonts", "DejaVu")
+    for f in os.listdir(default_font_path):
+        font_path = os.path.join(default_font_path, f)
+        if os.path.isfile(font_path) and f.endswith(".ttf"):
+            font_names.add(f)
+            font_paths.append(os.path.join(default_font_path, f))
 
-
-def get_system_fonts():
-    """Retrieves a list of fonts for any operating system. Note that this may not be a complete list of fonts discoverable on the system.
-    :returns A list of filepaths to fonts available on the system."""
     if sys.platform == "linux" or sys.platform == "linux2" or sys.platform == "darwin":
         # Linux and OS X.
-        return subprocess.check_output("fc-list --format %{file}\\n".split()).split('\n')
+        linux_font_paths = subprocess.check_output("fc-list --format %{file}\\n".split()).split('\n')
+        for f in linux_font_paths:
+            font_name = os.path.basename(f)
+            if not font_name in font_names:
+                font_names.add(font_name)
+                font_paths.append(f)
     elif sys.platform == "win32" or sys.platform == "cygwin":
         # Windows.
-        fonts = []
         for f in os.listdir(os.path.join(os.environ['WINDIR'], "fonts")):
             if f.endswith(".ttf"):
-                fonts.append(os.path.join(os.environ['WINDIR'], f))
-        return fonts
+                if not f in font_names:
+                    font_names.add(f)
+                    font_paths.append(os.path.join(os.environ['WINDIR'], "fonts", f))
     else:
-        raise NotImplementedError('Unsupported operating system.')
+        # I don't know how to find these for Mac OS  Maybe someone can help with this?
+        pass
+
+    # sort the fonts
+    font_paths.sort(key=(lambda b: os.path.basename(b).lower()))
+    return font_paths
 
 
-class POpenWithTimeout(object):
-    class ProcessError(Exception):
-        def __init__(self, error_type, message, cause=None):
-            super(POpenWithTimeout.ProcessError, self).__init__()
-            self.error_type = error_type
-            self.cause = cause if cause is not None else None
-            self.message = message
-
-        def __str__(self):
-            if self.cause is None:
-                return "{}: {}".format(self.error_type, self.message, str(self.cause))
-            if isinstance(self.cause, list):
-                if len(self.cause) > 1:
-                    error_string = "{}: {} - Inner Exceptions".format(self.error_type, self.message)
-                    error_count = 1
-                    for cause in self.cause:
-                        error_string += "\n    {}: {} Exception - {}".format(error_count, type(cause).__name__, str(cause))
-                        error_count += 1
-                    return error_string
-                elif len(self.cause) == 1:
-                    return "{}: {} - Inner Exception: {}".format(self.error_type, self.message, str(self.cause[0]))
-            return "{}: {} - Inner Exception: {}".format(self.error_type, self.message, str(self.cause))
-
-    lock = threading.Lock()
-
-    def __init__(self):
-        self.proc = None
-        self.stdout = ''
-        self.stderr = ''
-        self.completed = False
-        self.exception = None
-        self.subprocess_kill_exceptions = []
-        self.kill_exceptions = None
-
-    def kill(self):
-            if self.proc is None:
-                return
-            try:
-                process = psutil.Process(self.proc.pid)
-                for proc in process.children(recursive=True):
-                    try:
-                        proc.kill()
-                    except psutil.NoSuchProcess:
-                        # the process must have completed
-                        pass
-                    except (psutil.Error,psutil.AccessDenied, psutil.ZombieProcess) as e:
-                        self.kill_exceptions.append(e)
-                process.kill()
-            except psutil.NoSuchProcess:
-                # the process must have completed
-                pass
-            except (psutil.Error, psutil.AccessDenied, psutil.ZombieProcess) as e:
-                self.kill_exceptions = e
-
-    def get_exceptions(self):
-        if (
-            self.exception is None
-            and (self.subprocess_kill_exceptions is None or len(self.subprocess_kill_exceptions) == 0)
-            and self.kill_exceptions is None
-        ):
-            return None
-        causes = []
-        error_type = None
-        error_message = None
-        if self.exception is not None:
-            error_type = 'script-execution-error'
-            error_message = 'An error occurred curing the execution of a custom script.'
-            causes.append(self.exception)
-        if self.kill_exceptions is not None:
-            if error_type is None:
-                error_type = 'script-kill-error'
-                error_message = 'A custom script timed out, and an error occurred while terminating the process.'
-            causes.append(self.kill_exceptions)
-        if len(self.subprocess_kill_exceptions) > 0:
-            if error_type is None:
-                error_type = 'script-subprocess-kill-error'
-                error_message = 'A custom script timed out, and an error occurred while terminating one of its ' \
-                                'subprocesses.'
-            for cause in self.subprocess_kill_exceptions:
-                causes.append(cause)
-
-        return POpenWithTimeout.ProcessError(
-            error_type,
-            error_message,
-            cause=causes)
-
-    # run a command with the provided args, timeout in timeout_seconds
-    def run(self, args, timeout_seconds):
-
-        # Create, start and run the process and fill in stderr and stdout
-        def execute_process(args):
-            # get the lock so that we can start the process without encountering a timeout
-            self.lock.acquire()
-            try:
-                # don't start the process if we've already timed out
-                if not self.completed:
-                    self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                else:
-                    return
-            except (OSError, subprocess.CalledProcessError) as e:
-                self.exception = e
-                self.completed = True
-                (exc_stdout, exc_stderr) = self.proc.communicate()
-                self.stdout = exc_stdout
-                self.stderr = exc_stderr
-                return
-            finally:
-                self.lock.release()
-
-            (t_stdout, t_stderr) = self.proc.communicate()
-            self.lock.acquire()
-            try:
-                if not self.completed:
-                    self.stdout = t_stdout
-                    self.stderr = t_stderr
-                    self.completed = True
-            finally:
-                self.lock.release()
-
-        thread = threading.Thread(target=execute_process, args=[args])
-        # start the thread
-        thread.start()
-        # join the thread with a timeout
-        thread.join(timeout=timeout_seconds)
-        # check to see if the thread is alive
-        if thread.is_alive():
-            self.lock.acquire()
-            try:
-                if not self.completed:
-                    if self.proc is not None:
-                        self.kill()
-                        (p_stdout, p_stderr) = self.proc.communicate()
-                        self.stdout = p_stdout
-                        self.stderr = p_stderr + '- The snapshot script timed out in {0} seconds.'.format(timeout_seconds)
-                    self.completed = True
-            finally:
-                self.lock.release()
-
-        if self.proc is not None:
-            # raise any exceptions that were caught
-            exceptions = self.get_exceptions()
-            if exceptions is not None:
-                raise exceptions
-            return self.proc.returncode
-        else:
-            self.stderr = 'The process does not exist'
-            return -100
-
-def run_command_with_timeout(args, timeout_sec):
-    """Execute `cmd` in a subprocess and enforce timeout `timeout_sec` seconds.
-    Return subprocess exit code on natural completion of the subprocess.
-    Raise an exception if timeout expires before subprocess completes."""
 
 
-    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def get_directory_size(root, recurse=False):
+    total_size = 0
+    try:
+        if not os.path.isdir(root):
+            return 0
+        for name in os.listdir(root):
+            file_path = os.path.join(root, name)
+            if os.path.isfile(file_path):
+                total_size += os.path.getsize(file_path)
+            elif recurse and os.path.isdir(file_path):
+                total_size += get_directory_size(file_path, recurse)
+    except EnvironmentError as e:
+        if e.errno != errno.ENOENT:
+            raise
+        logger.exception(e)
+    return total_size
 
-    if timeout_sec is not None:
-        timer = Timer(timeout_sec, proc.kill)
 
+def get_file_creation_date(path):
+    if sys.platform == "win32":
+        # getctime always returns the creation date of a file, exactly what we want.
+        # in Linux this could be the st_ctime, which is always later than or equal to the
+        # modification date, so only trust this for windows.
+        return os.path.getctime(path)
+    # get file statistics
+    stat = os.stat(path)
+    if hasattr(stat, 'st_birthtime'):
+        # Not all OSs support st_birthtime, which is an actual creation date
+        return stat.st_birthtime
+
+    # for any other OS get the last content modification date.
+    return stat.st_mtime
+
+
+# MUCH faster than the standard shutil.copy
+def fast_copy(src, dst, buffer_size=1024 * 1024 * 1):
+    #    Optimize the buffer for small files
+    file_size = os.path.getsize(src)
+
+    buffer_size = min(buffer_size, file_size)
+    if buffer_size == 0:
+        buffer_size = 1024
+
+    with open(src, 'rb') as fin:
+        with open(dst, 'wb') as fout:
+            shutil.copyfileobj(fin, fout, buffer_size)
+
+
+# function to walk a directory and return all contained subdirectories
+def walk_directories(root):
+    for name in os.listdir(root):
+        if os.path.isdir(os.path.join(root, name)):
+            yield name
+
+
+# an iterable function to walk all files in a given directory and return a list of files with metadata
+def walk_files(root, filter_function=None):
+    '''Iterable function, returns a list of dicts, each including name, extension, size, and date (creation date if
+    possible, else modified date)).  Can be filtered to only include files with extensions in the provided set. '''
+    for name in os.listdir(root):
+        file_path = os.path.join(root, name)
+        if os.path.isfile(file_path):
+            extension = get_extension_from_filename(name)
+
+            if filter_function and not filter_function(root, name, extension):
+                continue
+            yield {
+                'name': name,
+                'extension': extension,
+                'size': os.path.getsize(file_path),
+                'date': get_file_creation_date(file_path)
+            }
+
+
+FILE_TYPE_SNAPSHOT_ARCHIVE = "snapshot_archive"
+FILE_TYPE_TIMELAPSE_OCTOLAPSE = "timelapse_octolapse"
+FILE_TYPE_TIMELAPSE_OCTOPRINT = "timelapse_octoprint"
+
+
+def get_file_info(file_path):
+    name = os.path.basename(file_path)
+    extension = get_extension_from_filename(name)
+    return {
+        'name': name,
+        'extension': extension,
+        'size': os.path.getsize(file_path) if os.path.isfile(file_path) else 0,
+        'date': get_file_creation_date(file_path)
+    }
+
+
+# Handle windows specific stuff (TODO: need to move other code here too)
+def is_windows():
+    return sys.platform.startswith('win')
+
+
+# Handle windows errors that do not exist on Linux (why???)
+# Windows Exceptions in Linux
+try:
+    from exceptions import WindowsError
+except ImportError:
+    class WindowsError(OSError): pass
+
+
+ERROR_WINDOWS_DIRECTORY_NOT_EMPTY = 145
+ERROR_WINDOWS_DIRECTORY_NOT_EMPTY_RETRIES = 10
+ERROR_WINDOWS_DIRECTORY_NOT_EMPTY_RETRY_MS = 1.0/1000.0
+
+
+def rmtree(path):
+    """
+    Windows doesn't seem to be able to reliably immediately delete a path.  It often works after waiting
+    for a small amount of time.  I added retry to this function so that it works more reliably on windows.
+    :param path:
+    :return:
+    """
+    num_tries = 0
+    while True:
         try:
-            timer.start()
-            (stdout, stderr) = proc.communicate()
-        finally:
-            timer.cancel()
-    else:
-        (stdout, stderr) = proc.communicate()
-    # Process completed naturally - return exit code
-    return proc.returncode, stdout, stderr
+            shutil.rmtree(path)
+            break
+        except WindowsError as e:
+            if not e.winerror != ERROR_WINDOWS_DIRECTORY_NOT_EMPTY:
+                raise e
+            num_tries += 1
+            if num_tries < ERROR_WINDOWS_DIRECTORY_NOT_EMPTY_RETRIES:
+                time.sleep(ERROR_WINDOWS_DIRECTORY_NOT_EMPTY_RETRY_MS)
+            else:
+                raise e
+
+
+ERROR_WINDOWS_FILE_IS_IN_USE = 32
+ERROR_WINDOWS_FILE_IS_IN_USE_RETRIES = 10
+ERROR_WINDOWS_FILE_IS_IN_USE_RETRY_SECONDS = 1.0/1000.0
+
+
+def remove(path):
+    """For some reason closed files are sometimes open if you try to remove them immediately after a file operation.
+       This happens occationally when using Pillow to save images.  I added this function so that windows can retry
+       a delete before failing with an exception.
+    """
+    num_tries = 0
+    while True:
+        try:
+            os.remove(path)
+            break
+        except WindowsError as e:
+            if e.winerror != ERROR_WINDOWS_FILE_IS_IN_USE:
+                raise e
+            num_tries += 1
+            if num_tries < ERROR_WINDOWS_FILE_IS_IN_USE_RETRIES:
+                time.sleep(ERROR_WINDOWS_FILE_IS_IN_USE_RETRY_SECONDS)
+            else:
+                raise e
+
+def move(src, dst):
+    """For some reason closed files are sometimes open if you try to remove them immediately after a file operation.
+       This happens occationally when using Pillow to save images.  I added this function so that windows can retry
+       a delete before failing with an exception.
+    """
+    num_tries = 0
+    while True:
+        try:
+            shutil.move(src, dst)
+            break
+        except WindowsError as e:
+            if e.winerror != ERROR_WINDOWS_FILE_IS_IN_USE:
+                raise e
+            num_tries += 1
+            if num_tries < ERROR_WINDOWS_FILE_IS_IN_USE_RETRIES:
+                time.sleep(ERROR_WINDOWS_FILE_IS_IN_USE_RETRY_SECONDS)
+            else:
+                raise e
 
 
 class TimelapseJobInfo(object):
-    def __init__(self, job_info=None, job_guid=None, print_start_time=None, print_file_name=None):
+    timelapse_info_file_name = "timelapse_info.json"
+
+    @staticmethod
+    def is_timelapse_info_file(file_name):
+        return file_name.lower() == TimelapseJobInfo.timelapse_info_file_name
+
+    def __init__(
+        self, job_info=None, job_guid=None, print_start_time=None, print_end_time=None,
+        print_end_state="INCOMPLETE", print_file_name="UNKNOWN", print_file_extension=None
+     ):
         if job_info is None:
-            self.JobGuid = str(job_guid)
-            self.PrintEndTime = None
+            self.JobGuid = None if job_guid is None else "{}".format(job_guid)
             self.PrintStartTime = print_start_time
+            self.PrintEndTime = print_end_time
+            self.PrintEndState = print_end_state
             self.PrintFileName = print_file_name
+            self.PrintFileExtension = print_file_extension
         else:
             self.JobGuid = job_info.JobGuid
-            self.PrintEndTime = job_info.PrintEndTime
             self.PrintStartTime = job_info.PrintStartTime
+            self.PrintEndTime = job_info.PrintEndTime
+            self.PrintEndState = job_info.PrintEndState
             self.PrintFileName = job_info.PrintFileName
+            self.PrintFileExtension = job_info.PrintFileExtension
+
+    @staticmethod
+    def load(data_folder, print_job_guid, camera_guid=None):
+        file_directory = get_temporary_snapshot_job_path(data_folder, print_job_guid)
+        file_path = os.path.join(file_directory, TimelapseJobInfo.timelapse_info_file_name)
+        try:
+            with open(file_path, 'r') as timelapse_info:
+                data = json.load(timelapse_info)
+                return TimelapseJobInfo.from_dict(data)
+        except (OSError, IOError, ValueError) as e:
+            logger.exception("Unable to load TimelapseJobInfo from %s.", file_path)
+            info = TimelapseJobInfo()
+            info.PrintEndState = "UNKNOWN"
+            info.JobGuid = print_job_guid
+            if camera_guid is not None:
+                snapshot_path = os.path.join(file_directory, camera_guid)
+                if os.path.exists(snapshot_path):
+                    # look for a jpg from which to extract the print name
+                    for name in os.listdir(snapshot_path):
+                        camera_file_path = os.path.join(snapshot_path, name)
+                        extension = get_extension_from_filename(name)
+
+                        if (
+                            os.path.isfile(camera_file_path) and
+                            is_valid_snapshot_extension(extension) and
+                            name.endswith(".{0}".format(extension))
+                        ):
+                            if len(name) > 10:
+                                test_image_number_string = name[len(name)-10:len(name)-4]
+                                try:
+                                    int(test_image_number_string)
+                                    info.PrintFileName = name[0:len(name)-10]
+                                    break
+                                except ValueError:
+                                    pass
+                            info.PrintFileName = name[0:len(name) - 4]
+                            break
+            return info
+
+    def save(self, temporary_directory):
+        file_directory = get_temporary_snapshot_job_path(temporary_directory, self.JobGuid)
+        file_path = os.path.join(file_directory, TimelapseJobInfo.timelapse_info_file_name)
+        if not os.path.exists(file_directory):
+            os.makedirs(file_directory)
+        with open(file_path, 'w') as timelapse_info:
+            json.dump(self.to_dict(), timelapse_info)
+
+    def to_dict(self):
+        return {
+            "job_guid": self.JobGuid,
+            "print_start_time": self.PrintStartTime,
+            "print_end_time": self.PrintEndTime,
+            "print_end_state": self.PrintEndState,
+            "print_file_name": self.PrintFileName,
+            "print_file_extension": self.PrintFileExtension
+        }
+
+    @staticmethod
+    def from_dict(dict_obj):
+        return TimelapseJobInfo(
+            job_guid=dict_obj["job_guid"],
+            print_start_time=dict_obj["print_start_time"],
+            print_end_time=dict_obj["print_end_time"],
+            print_end_state=dict_obj["print_end_state"],
+            print_file_name=dict_obj["print_file_name"],
+            print_file_extension=dict_obj["print_file_extension"],
+        )
+
+
+if sys.version_info < (3, 0):
+    def unquote(value):
+        return urllib.unquote(value)
+else:
+    def unquote(value):
+        return urllib.parse.unquote(value)
+
+
+class RecurringTimerThread(threading.Thread):
+    def __init__(self, interval_seconds, callback, cancel_event, first_run_delay_seconds=None):
+        threading.Thread.__init__(self)
+        self._interval_seconds = interval_seconds
+        self._callback = callback
+        self._cancel_event = cancel_event
+        self._trigger = threading.Event()
+        self._first_run_delay_seconds = first_run_delay_seconds
+
+    def run(self):
+        if self._first_run_delay_seconds is not None:
+            time.sleep(self._first_run_delay_seconds)
+            self._callback()
+        while not self._cancel_event.wait(self._interval_seconds):
+            self._callback()
+
+
+class SafeDict(dict):
+    def __missing__(self, key):
+        return '{' + key + '}'
+
+
+# retry utility adapted from https://www.peterbe.com/plog/best-practice-with-retries-with-requests
+def requests_retry_session(
+    retries=3,
+    backoff_factor=0.3,
+    status_forcelist=(500, 502, 504),
+    session=None,
+):
+    session = session or requests.Session()
+    retry = Retry(
+        total=retries,
+        read=retries,
+        connect=retries,
+        backoff_factor=backoff_factor,
+        status_forcelist=status_forcelist,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    return session

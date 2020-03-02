@@ -21,10 +21,10 @@
 # following email address: FormerLurker@pm.me
 ##################################################################################
 */
-$(function() {
+$(function () {
     Octolapse.StabilizationProfileViewModel = function (values) {
         var self = this;
-        self.profileTypeName = ko.observable("Stabilization")
+        self.profileTypeName = ko.observable("Stabilization");
         self.guid = ko.observable(values.guid);
         self.name = ko.observable(values.name);
         self.description = ko.observable(values.description);
@@ -48,25 +48,82 @@ $(function() {
         self.y_relative_path = ko.observable(values.y_relative_path);
         self.y_relative_path_loop = ko.observable(values.y_relative_path_loop);
         self.y_relative_path_invert_loop = ko.observable(values.y_relative_path_invert_loop);
+        self.wait_for_moves_to_finish = ko.observable(values.wait_for_moves_to_finish);
+
+        self.updateFromServer = function(values) {
+            self.name(values.name);
+            self.description(values.description);
+            self.x_type(values.x_type);
+            self.x_fixed_coordinate(values.x_fixed_coordinate);
+            self.x_fixed_path(values.x_fixed_path);
+            self.x_fixed_path_loop(values.x_fixed_path_loop);
+            self.x_fixed_path_invert_loop(values.x_fixed_path_invert_loop);
+            self.x_relative(values.x_relative);
+            self.x_relative_print(values.x_relative_print);
+            self.x_relative_path(values.x_relative_path);
+            self.x_relative_path_loop(values.x_relative_path_loop);
+            self.x_relative_path_invert_loop(values.x_relative_path_invert_loop);
+            self.y_type(values.y_type);
+            self.y_fixed_coordinate(values.y_fixed_coordinate);
+            self.y_fixed_path(values.y_fixed_path);
+            self.y_fixed_path_loop(values.y_fixed_path_loop);
+            self.y_fixed_path_invert_loop(values.y_fixed_path_invert_loop);
+            self.y_relative(values.y_relative);
+            self.y_relative_print(values.y_relative_print);
+            self.y_relative_path(values.y_relative_path);
+            self.y_relative_path_loop(values.y_relative_path_loop);
+            self.y_relative_path_invert_loop(values.y_relative_path_invert_loop);
+            if (typeof values.wait_for_moves_to_finish !== 'undefined') {
+                self.wait_for_moves_to_finish(values.wait_for_moves_to_finish);
+            }
+        };
+
+        self.automatic_configuration = new Octolapse.ProfileLibraryViewModel(
+            values.automatic_configuration,
+            Octolapse.Stabilizations.profileOptions.server_profiles,
+            self.profileTypeName(),
+            self,
+            self.updateFromServer
+        );
+
+        self.toJS = function()
+        {
+            // need to remove the parent link from the automatic configuration to prevent a cyclic copy
+            var parent = self.automatic_configuration.parent;
+            self.automatic_configuration.parent = null;
+            var copy = ko.toJS(self);
+            self.automatic_configuration.parent = parent;
+            return copy;
+        };
+
+        self.on_closed = function(){
+            self.automatic_configuration.on_closed();
+        };
+
+        self.automatic_configuration.is_confirming.subscribe(function(value){
+            //console.log("IsClickable" + value.toString());
+            Octolapse.Stabilizations.setIsClickable(!value);
+        });
     };
+
 
     Octolapse.StabilizationProfileValidationRules = {
         rules: {
-            name: "required"
-            ,x_type: "required"
-            ,x_fixed_coordinate: { number: true, required: true }
-            , x_fixed_path: { required: true, csvFloat: true}
-            , x_relative: { required: true, number: true,min:0.0, max:100.0 }
-            , x_relative_path: { required: true, csvRelative: true }
-            , y_type: "required"
-            , y_fixed_coordinate: { number: true, required: true }
-            , y_fixed_path: { required: true, csvFloat: true }
-            , y_relative: { required: true, number: true, min: 0.0, max: 100.0 }
-            , y_relative_path: { required: true, csvRelative: true }
-
+            octolapse_stabilization_name: "required"
+            , octolapse_stabilization_stabilization_type: "required"
+            , octolapse_stabilization_x_type: "required"
+            , octolapse_stabilization_x_fixed_coordinate: {number: true, required: true}
+            , octolapse_stabilization_x_fixed_path: {required: true, csvFloat: true}
+            , octolapse_stabilization_x_relative: {required: true, number: true, min: 0.0, max: 100.0}
+            , octolapse_stabilization_x_relative_path: {required: true, csvRelative: true}
+            , octolapse_stabilization_y_type: "required"
+            , octolapse_stabilization_y_fixed_coordinate: {number: true, required: true}
+            , octolapse_stabilization_y_fixed_path: {required: true, csvFloat: true}
+            , octolapse_stabilization_y_relative: {required: true, number: true, min: 0.0, max: 100.0}
+            , octolapse_stabilization_y_relative_path: {required: true, csvRelative: true},
         },
         messages: {
-            name: "Please enter a name for your profile"
+            octolapse_stabilization_name: "Please enter a name for your profile",
         }
     };
 });

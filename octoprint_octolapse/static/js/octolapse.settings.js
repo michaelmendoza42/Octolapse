@@ -31,26 +31,21 @@ $(function () {
         var self = this;
         // Add this object to our Octolapse namespace
         Octolapse.Settings = this;
+        Octolapse.Settings.GlobalOptions = {};
         // Create an empty add/edit profile so that the initial binding to the empty template works without errors.
         Octolapse.Settings.AddEditProfile = ko.observable({
             "templateName": "empty-template",
             "profileObservable": ko.observable()
         });
+        Octolapse.MainSettingsDisplay = new Octolapse.MainSettingsEditViewModel();
         // Assign the Octoprint settings to our namespace
         Octolapse.Settings.global_settings = parameters[0];
-
+        Octolapse.Settings.is_loaded = ko.observable(false);
         self.loginState = parameters[1];
-
-
+        self.show_import_options = ko.observable(false);
+        Octolapse.SettingsImport = new Octolapse.SettingsImportViewModel();
         // Called before octoprint binds the viewmodel to the plugin
         self.onBeforeBinding = function () {
-
-            /*
-                Create our global settings
-            */
-            self.settings = self.global_settings.settings.plugins.octolapse;
-            var settings = ko.toJS(self.settings); // just get the values
-
             /**
              * Profiles - These are bound by octolapse.profiles.js
              */
@@ -93,25 +88,27 @@ $(function () {
                     , 'setCurrentProfilePath': 'setCurrentProfile'
                 };
             Octolapse.Stabilizations = new Octolapse.ProfilesViewModel(stabilizationSettings);
+
             /*
-                Create our snapshots view model
+                Create our triggers view model
             */
-            var snapshotSettings =
+            var triggerSettings =
                 {
-                    'current_profile_guid': null,
-                    'profiles': [],
-                    'default_profile': null,
-                    'profileOptions': {},
-                    'profileViewModelCreateFunction': Octolapse.SnapshotProfileViewModel,
-                    'profileValidationRules': Octolapse.SnapshotProfileValidationRules,
-                    'bindingElementId': 'octolapse_snapshot_tab',
-                    'addEditTemplateName': 'snapshot-template',
-                    'profileTypeName': 'Snapshot',
-                    'addUpdatePath': 'addUpdateProfile',
-                    'removeProfilePath': 'removeProfile',
-                    'setCurrentProfilePath': 'setCurrentProfile'
+                    'current_profile_guid': null
+                    , 'profiles': []
+                    , 'default_profile': null
+                    , 'profileOptions': {}
+                    , 'profileViewModelCreateFunction': Octolapse.TriggerProfileViewModel
+                    , 'profileValidationRules': Octolapse.TriggerProfileValidationRules
+                    , 'bindingElementId': 'octolapse_trigger_tab'
+                    , 'addEditTemplateName': 'trigger-template'
+                    , 'profileTypeName': 'Trigger'
+                    , 'addUpdatePath': 'addUpdateProfile'
+                    , 'removeProfilePath': 'removeProfile'
+                    , 'setCurrentProfilePath': 'setCurrentProfile'
                 };
-            Octolapse.Snapshots = new Octolapse.ProfilesViewModel(snapshotSettings);
+            Octolapse.Triggers = new Octolapse.ProfilesViewModel(triggerSettings);
+
             /*
                 Create our rendering view model
             */
@@ -152,117 +149,119 @@ $(function () {
             Octolapse.Cameras = new Octolapse.ProfilesViewModel(cameraSettings);
 
             /*
-                Create our debug view model
+                Create our logging view model
             */
-            var debugSettings =
+            var loggingSettings =
                 {
                     'current_profile_guid': null,
                     'profiles': [],
                     'default_profile': null,
                     'profileOptions': {},
-                    'profileViewModelCreateFunction': Octolapse.DebugProfileViewModel,
-                    'profileValidationRules': Octolapse.DebugProfileValidationRules,
-                    'bindingElementId': 'octolapse_debug_tab',
-                    'addEditTemplateName': 'debug-template',
-                    'profileTypeName': 'Debug',
+                    'profileViewModelCreateFunction': Octolapse.LoggingProfileViewModel,
+                    'profileValidationRules': Octolapse.LoggingProfileValidationRules,
+                    'bindingElementId': 'octolapse_logging_tab',
+                    'addEditTemplateName': 'logging-profile-template',
+                    'profileTypeName': 'Logging',
                     'addUpdatePath': 'addUpdateProfile',
                     'removeProfilePath': 'removeProfile',
                     'setCurrentProfilePath': 'setCurrentProfile'
                 };
-            Octolapse.DebugProfiles = new Octolapse.ProfilesViewModel(debugSettings);
+            Octolapse.LoggingProfiles = new Octolapse.ProfilesViewModel(loggingSettings);
 
+        };
+
+        self.onAfterBinding = function (){
+            // initialize settings import
+            Octolapse.SettingsImport.initialize();
         };
 
         // Update all octolapse settings
         self.updateSettings = function (settings) {
             //console.log("Settings Received:");
             //console.log(settings);
+            // GlobalOptions
+            Octolapse.SettingsImport.update(settings);
             // SettingsMain
-            Octolapse.SettingsMain.update(settings);
+            Octolapse.MainSettingsDisplay.defaults = settings.profiles.defaults.main_settings;
 
             // Printers
-            Octolapse.Printers.profiles([]);
-            Octolapse.Printers.default_profile(settings.default_printer_profile);
-            Octolapse.Printers.profileOptions = {
-                'slicer_type_options': settings.slicer_type_options,
-                'e_axis_default_mode_options': settings.e_axis_default_mode_options,
-                'g90_influences_extruder_options': settings.g90_influences_extruder_options,
-                'xyz_axes_default_mode_options': settings.xyz_axes_default_mode_options,
-                'units_default_options': settings.units_default_options,
-                'axis_speed_display_unit_options': settings.axis_speed_display_unit_options
-            };
-            Octolapse.Printers.current_profile_guid(settings.current_printer_profile_guid);
-            settings.printers.forEach(function (item, index) {
-                Octolapse.Printers.profiles.push(new Octolapse.PrinterProfileViewModel(item));
+            var printers = [];
+            Octolapse.Printers.default_profile(settings.profiles.defaults.printer);
+            Octolapse.Printers.profileOptions = settings.profiles.options.printer;
+            Octolapse.Printers.current_profile_guid(settings.profiles.current_printer_profile_guid);
+            Object.keys(settings.profiles.printers).forEach(function(key) {
+                printers.push(new Octolapse.PrinterProfileViewModel(settings.profiles.printers[key]));
             });
+            Octolapse.Printers.profiles(printers);
 
-            Octolapse.Stabilizations.profiles([]);
-            Octolapse.Stabilizations.default_profile(settings.default_stabilization_profile);
-            Octolapse.Stabilizations.profileOptions = {'stabilization_type_options': settings.stabilization_type_options}
-            Octolapse.Stabilizations.current_profile_guid(settings.current_stabilization_profile_guid);
-            settings.stabilizations.forEach(function (item, index) {
-                Octolapse.Stabilizations.profiles.push(new Octolapse.StabilizationProfileViewModel(item));
+            // Stabilizations
+            var stabilizations = [];
+            Octolapse.Stabilizations.default_profile(settings.profiles.defaults.stabilization);
+            Octolapse.Stabilizations.profileOptions = settings.profiles.options.stabilization;
+            Octolapse.Stabilizations.current_profile_guid(settings.profiles.current_stabilization_profile_guid);
+            Object.keys(settings.profiles.stabilizations).forEach(function(key) {
+                stabilizations.push(new Octolapse.StabilizationProfileViewModel(settings.profiles.stabilizations[key]));
             });
+            Octolapse.Stabilizations.profiles(stabilizations);
 
-            // Snapshots
-            Octolapse.Snapshots.profiles([]);
-            Octolapse.Snapshots.default_profile(settings.default_snapshot_profile);
-            Octolapse.Snapshots.profileOptions ={
-                'trigger_types': settings.trigger_types,
-                'snapshot_extruder_trigger_options': settings.snapshot_extruder_trigger_options,
-                'position_restriction_shapes': settings.position_restriction_shapes,
-                'position_restriction_types': settings.position_restriction_types
-            }
-            Octolapse.Snapshots.current_profile_guid(settings.current_snapshot_profile_guid);
-            settings.snapshots.forEach(function (item, index) {
-                Octolapse.Snapshots.profiles.push(new Octolapse.SnapshotProfileViewModel(item));
+            // Triggers
+            var triggers = [];
+            Octolapse.Triggers.default_profile(settings.profiles.defaults.trigger);
+            Octolapse.Triggers.profileOptions = settings.profiles.options.trigger;
+            Octolapse.Triggers.current_profile_guid(settings.profiles.current_trigger_profile_guid);
+            Object.keys(settings.profiles.triggers).forEach(function(key) {
+                triggers.push(new Octolapse.TriggerProfileViewModel(settings.profiles.triggers[key]));
             });
+            Octolapse.Triggers.profiles(triggers);
 
             // Renderings
-            Octolapse.Renderings.profiles([]);
-            Octolapse.Renderings.default_profile(settings.default_rendering_profile);
-            Octolapse.Renderings.profileOptions = {
-                'rendering_fps_calculation_options': settings.rendering_fps_calculation_options,
-                'rendering_output_format_options': settings.rendering_output_format_options,
-                'rendering_file_templates': settings.rendering_file_templates,
-                'overlay_text_templates': settings.overlay_text_templates,
-                'overlay_text_alignment_options': settings.overlay_text_alignment_options,
-                'overlay_text_valign_options': settings.overlay_text_valign_options,
-                'overlay_text_halign_options': settings.overlay_text_halign_options,
-            }
-            Octolapse.Renderings.current_profile_guid(settings.current_rendering_profile_guid);
-            settings.renderings.forEach(function (item, index) {
-                var o = new Octolapse.RenderingProfileViewModel(item);
-                Octolapse.Renderings.profiles.push(o);
+            var renderings = [];
+            Octolapse.Renderings.default_profile(settings.profiles.defaults.rendering);
+            Octolapse.Renderings.profileOptions = settings.profiles.options.rendering;
+            Octolapse.Renderings.current_profile_guid(settings.profiles.current_rendering_profile_guid);
+            Object.keys(settings.profiles.renderings).forEach(function(key) {
+                renderings.push(new Octolapse.RenderingProfileViewModel(settings.profiles.renderings[key]));
             });
+            Octolapse.Renderings.profiles(renderings);
 
             // Cameras
-            Octolapse.Cameras.profiles([]);
-            Octolapse.Cameras.default_profile(settings.default_camera_profile);
-            Octolapse.Cameras.profileOptions = {
-                'camera_powerline_frequency_options': settings.camera_powerline_frequency_options,
-                'camera_exposure_type_options': settings.camera_exposure_type_options,
-                'camera_led_1_mode_options': settings.camera_led_1_mode_options,
-                'snapshot_transpose_options': settings.snapshot_transpose_options,
-                'camera_type_options': settings.camera_type_options
-
-            }
-
-            settings.cameras.forEach(function (item, index) {
-                Octolapse.Cameras.profiles.push(new Octolapse.CameraProfileViewModel(item));
+            var cameras = [];
+            Octolapse.Cameras.default_profile(settings.profiles.defaults.camera);
+            Octolapse.Cameras.profileOptions = settings.profiles.options.camera;
+            //console.log("Creating initial camera profiles.");
+            Object.keys(settings.profiles.cameras).forEach(function(key) {
+                cameras.push(new Octolapse.CameraProfileViewModel(settings.profiles.cameras[key]));
             });
+            Octolapse.Cameras.profiles(cameras);
 
-            // Debug
-            Octolapse.DebugProfiles.profiles([]);
-            Octolapse.DebugProfiles.default_profile(settings.current_debug_profile_guid);
-            Octolapse.DebugProfiles.profileOptions = {'debug_profile_options': settings.debug_profile_options}
-            Octolapse.DebugProfiles.current_profile_guid(settings.current_debug_profile_guid);
-            settings.debug_profiles.forEach(function (item, index) {
-                Octolapse.DebugProfiles.profiles.push(new Octolapse.DebugProfileViewModel(item));
+            // Logging
+            var logging_profiles=[];
+            Octolapse.LoggingProfiles.default_profile(settings.profiles.defaults.logging);
+            Octolapse.LoggingProfiles.profileOptions = settings.profiles.options.logging;
+            Octolapse.LoggingProfiles.current_profile_guid(settings.profiles.current_logging_profile_guid);
+            //console.log("Creating Logging Profiles")
+            Object.keys(settings.profiles.logging).forEach(function(key) {
+                logging_profiles.push(new Octolapse.LoggingProfileViewModel(settings.profiles.logging[key]));
             });
+            Octolapse.LoggingProfiles.profiles(logging_profiles);
+            Octolapse.Settings.is_loaded(true);
 
         };
 
+        self.getProfileByGuid = function(profiles, guid) {
+            var index = Octolapse.arrayFirstIndexOf(profiles(),
+                function(item) {
+                    var itemGuid = item.guid();
+                    var matchFound = itemGuid === guid;
+                    if (matchFound)
+                        return matchFound
+                }
+            );
+            if (index < 0) {
+                return null;
+            }
+            return profiles()[index];
+        };
         /*
             reload the default settings
         */
@@ -282,11 +281,34 @@ $(function () {
                         success: function (newSettings) {
 
                             self.updateSettings(newSettings);
-                            Octolapse.Globals.update(newSettings);
-                            alert("The default settings have been restored.  It is recommended that you restart the OctoPrint server now.");
+                            Octolapse.Globals.main_settings.update(newSettings.main_settings);
+                            var message = "The default settings have been restored. Octolapse is checking for profile updates now.";
+                            var options = {
+                                title: 'Default Settings Restored',
+                                text: message,
+                                type: 'success',
+                                hide: true,
+                                addclass: "octolapse",
+                                desktop: {
+                                    desktop: true
+                                }
+                            };
+                            Octolapse.displayPopup(options);
+                            self.checkForProfileUpdates();
                         },
                         error: function (XMLHttpRequest, textStatus, errorThrown) {
-                            alert("Unable to restore the default settings.  Status: " + textStatus + ".  Error: " + errorThrown);
+                            var message = "Unable to restore the default settings.  Status: " + textStatus + ".  Error: " + errorThrown;
+                            var options = {
+                                title: 'Error Restoring Defaults',
+                                text: message,
+                                type: 'error',
+                                hide: false,
+                                addclass: "octolapse",
+                                desktop: {
+                                    desktop: true
+                                }
+                            };
+                            Octolapse.displayPopup(options);
                         }
                     });
                 }
@@ -295,26 +317,50 @@ $(function () {
         /*
             load all settings default settings
         */
-        self.loadSettings = function () {
+        self.loadSettings = function (success_callback) {
 
             // If no guid is supplied, this is a new profile.  We will need to know that later when we push/update our observable array
             $.ajax({
-                url: "./plugin/octolapse/loadSettings",
+                url: "./plugin/octolapse/loadSettingsAndState",
                 type: "POST",
                 contentType: "application/json",
                 dataType: "json",
                 success: function (newSettings) {
-                    self.updateSettings(newSettings);
+                    self.updateSettings(newSettings.settings);
+                    Octolapse.Globals.updateState(newSettings);
+                    // Load the current state before running the success callback.
+                    //console.log("Settings and state loaded.");
+
+                    // Todo:  Add an error callback if the current state cannot be loaded
+                    if(success_callback)
+                    {
+                        success_callback();
+                    }
+
+
                     //console.log("Settings have been loaded.");
                 },
                 error: function (XMLHttpRequest, textStatus, errorThrown) {
-                    alert("Octolapse was unable to load the current settings.  Status: " + textStatus + ".  Error: " + errorThrown);
+                    // Todo:  Add an error callback if the current settings cannot be loaded
+                    var message = "Octolapse was unable to load the current settings.  Status: " + textStatus + ".  Error: " + errorThrown;
+                    var options = {
+                        title: 'Settings Load Error',
+                        text: message,
+                        type: 'error',
+                        hide: false,
+                        addclass: "octolapse",
+                        desktop: {
+                            desktop: true
+                        }
+                    };
+                    Octolapse.displayPopup(options);
                 }
             });
 
         };
 
         self.clearSettings = function (){
+            Octolapse.Settings.is_loaded(false);
              // Printers
             Octolapse.Printers.profiles([]);
             Octolapse.Printers.default_profile(null);
@@ -325,11 +371,11 @@ $(function () {
             Octolapse.Stabilizations.default_profile(null);
             Octolapse.Stabilizations.current_profile_guid(null);
             Octolapse.Stabilizations.profileOptions = {};
-            // Snapshots
-            Octolapse.Snapshots.profiles([]);
-            Octolapse.Snapshots.default_profile(null);
-            Octolapse.Snapshots.current_profile_guid(null);
-            Octolapse.Snapshots.profileOptions = {};
+            // Triggers
+            Octolapse.Triggers.profiles([]);
+            Octolapse.Triggers.default_profile(null);
+            Octolapse.Triggers.current_profile_guid(null);
+            Octolapse.Triggers.profileOptions = {};
             // Renderings
             Octolapse.Renderings.profiles([]);
             Octolapse.Renderings.default_profile(null);
@@ -340,12 +386,224 @@ $(function () {
             Octolapse.Cameras.default_profile(null);
             Octolapse.Cameras.current_profile_guid(null);
             Octolapse.Cameras.profileOptions = {};
-            // Debugs
-            Octolapse.DebugProfiles.profiles([]);
-            Octolapse.DebugProfiles.default_profile(null);
-            Octolapse.DebugProfiles.current_profile_guid(null);
-            Octolapse.DebugProfiles.profileOptions = {};
-        }
+            // Logging Profiles
+            Octolapse.LoggingProfiles.profiles([]);
+            Octolapse.LoggingProfiles.default_profile(null);
+            Octolapse.LoggingProfiles.current_profile_guid(null);
+            Octolapse.LoggingProfiles.profileOptions = {};
+        };
+
+        self.checkForProfileUpdates = function(is_silent_test){
+            //console.log("Updating Octolapse profiles from the server.");
+            // is_silent_test is optional, make sure it is either true or false
+            is_silent_test = is_silent_test == true
+            var data = {
+                'is_silent_test': is_silent_test
+            };
+            $.ajax({
+                url: "./plugin/octolapse/checkForProfileUpdates",
+                type: "POST",
+                data: JSON.stringify(data),
+                contentType: "application/json",
+                dataType: "json",
+                success: function (values) {
+                    var available_profile_count = values.available_profile_count;
+                    var options;
+                    if (available_profile_count > 0)
+                    {
+                        // Always show profile update confirmation if updates are found at startup
+                        self.showProfileUpdateConfirmation(available_profile_count);
+                    }
+                    else if (!is_silent_test)
+                    {
+                        // Only report that settings are up-to-date if this is NOT a silent update request
+                        options = {
+                            title: 'Octolapse Updates',
+                            text: "Your Octolapse profiles are all up-to-date.",
+                            type: 'success',
+                            hide: true,
+                            addclass: "octolapse",
+                            desktop: {
+                                desktop: true
+                            }
+                        };
+                        Octolapse.displayPopupForKey(options, 'update-profile-from-server','update-profile-from-server');
+                    }
+                    //console.log("Check for updates complete.");
+
+
+                },
+                error: function (XMLHttpRequest, textStatus, errorThrown) {
+
+                    var message = "Octolapse was unable to check for updates.  Status: " + textStatus + ".  Error: " + errorThrown;
+                    console.error(message);
+                    var options = {
+                        title: 'Profile Update Error',
+                        text: message,
+                        type: 'error',
+                        hide: false,
+                        addclass: "octolapse",
+                        desktop: {
+                            desktop: true
+                        }
+                    };
+                    Octolapse.displayPopupForKey(options, 'update-profile-from-server','update-profile-from-server');
+                }
+            });
+        };
+
+        self.showProfileUpdateConfirmation = function(num_profiles_available){
+            var message = "There are updates available for " + num_profiles_available.toString() +
+                          " profiles. " +
+                          "Would you like to apply these updates now?";
+            Octolapse.showConfirmDialog(
+                "update-all-automatic-profiles",
+                "Apply Octolapse Updates",
+                message,
+                function(){
+                    var options = {
+                        title: 'Octolapse is Updating',
+                        text: num_profiles_available.toString() +" update are being applied.  Please wait.",
+                        type: 'info',
+                        hide: false,
+                        addclass: "octolapse",
+                        desktop: {
+                            desktop: true
+                        }
+                    };
+                    Octolapse.displayPopupForKey(options, 'update-profile-from-server','update-profile-from-server');
+                    Octolapse.Settings.updateProfilesFromServer();
+                },
+                function() {
+
+                },
+                function() {
+
+                },
+                function(){
+                    Octolapse.Settings.suppressServerUpdates();
+                },
+                "Ignore"
+            );
+        };
+
+
+        self.updateProfilesFromServer = function() {
+
+            //console.log("Updating Octolapse profiles from the server.");
+            // If no guid is supplied, this is a new profile.  We will need to know that later when we push/update our observable array
+            var data = {
+                'client_id': Octolapse.Globals.client_id
+            };
+            $.ajax({
+                url: "./plugin/octolapse/updateProfilesFromServer",
+                type: "POST",
+                data: JSON.stringify(data),
+                contentType: "application/json",
+                dataType: "json",
+                success: function (values) {
+                    var message;
+                    var title;
+                    //console.log("Octolapse profiles updated from the server.");
+                    var num_updated = values.num_updated;
+                    var options = {
+                        hide: true,
+                        addclass: "octolapse",
+                        desktop: {
+                            desktop: true
+                        }
+                    };
+                    if (num_updated > 0) {
+                        var settings = JSON.parse(values.settings);
+                        self.updateSettings(settings);
+                        Octolapse.Globals.loadState();
+                        options.title = "Octolapse Update Complete";
+                        options.text = num_updated.toString() + " profiles were updated successfully!";
+                        options.type = 'success';
+                    }
+                    else
+                    {
+                        options.title = "No Updates Applied";
+                        options.text = "Octolapse was already up-to-date.";
+                        options.type = 'warning';
+                    }
+
+                    Octolapse.displayPopupForKey(options, 'update-profile-from-server','update-profile-from-server');
+                },
+                error: function (XMLHttpRequest, textStatus, errorThrown) {
+
+                    var message = "Octolapse was unable to update your profiles to the most recent version the current settings.  Status: " + textStatus + ".  Error: " + errorThrown;
+                    console.error(message);
+                    var options = {
+                        title: 'Profile Update Error',
+                        text: message,
+                        type: 'error',
+                        hide: false,
+                        addclass: "octolapse",
+                        desktop: {
+                            desktop: true
+                        }
+                    };
+                    Octolapse.displayPopupForKey(options, 'update-profile-from-server','update-profile-from-server');
+                }
+            });
+        };
+
+        Octolapse.Settings.UpdateAvailableServerProfiles = function(server_profiles)
+        {
+            Octolapse.Printers.profileOptions.server_profiles = server_profiles["printer"];
+            Octolapse.Stabilizations.profileOptions.server_profiles = server_profiles["stabilization"];
+            Octolapse.Triggers.profileOptions.server_profiles = server_profiles["trigger"];
+            Octolapse.Renderings.profileOptions.server_profiles = server_profiles["rendering"];
+            Octolapse.Cameras.profileOptions.server_profiles = server_profiles["camera"];
+            Octolapse.LoggingProfiles.profileOptions.server_profiles = server_profiles["logging"];
+        };
+
+
+        self.suppressServerUpdates = function() {
+            var data = {
+                'client_id': Octolapse.Globals.client_id
+            };
+            $.ajax({
+                url: "./plugin/octolapse/suppressServerUpdates",
+                type: "POST",
+                data: JSON.stringify(data),
+                contentType: "application/json",
+                dataType: "json",
+                success: function (newSettings) {
+                    self.updateSettings(newSettings);
+                    Octolapse.Globals.loadState();
+                    var message = "Update notifications have been suppressed.  You can force an update at any time within the main settings page.";
+                    var options = {
+                        title: 'Updates Suppressed',
+                        text: message,
+                        type: 'info',
+                        hide: true,
+                        addclass: "octolapse",
+                        desktop: {
+                            desktop: true
+                        }
+                    };
+                    Octolapse.displayPopupForKey(options, 'updates-suppressed','updates-suppressed');
+                },
+                error: function (XMLHttpRequest, textStatus, errorThrown) {
+
+                    var message = "Octolapse was unable to supress update notifications.  Status: " + textStatus + ".  Error: " + errorThrown;
+                    console.error(message);
+                    var options = {
+                        title: 'Octolapse Update Error',
+                        text: message,
+                        type: 'error',
+                        hide: false,
+                        addclass: "octolapse",
+                        desktop: {
+                            desktop: true
+                        }
+                    };
+                    Octolapse.displayPopupForKey(options, 'updates-suppressed','updates-suppressed');
+                }
+            });
+        };
         /*
             Profile Add/Update routine for showAddEditDialog
         */
@@ -357,8 +615,8 @@ $(function () {
                 case "stabilization-template":
                     Octolapse.Stabilizations.addUpdateProfile(profile.profileObservable, self.hideAddEditDialog());
                     break;
-                case "snapshot-template":
-                    Octolapse.Snapshots.addUpdateProfile(profile.profileObservable, self.hideAddEditDialog());
+                case "trigger-template":
+                    Octolapse.Triggers.addUpdateProfile(profile.profileObservable, self.hideAddEditDialog());
                     break;
                 case "rendering-template":
                     Octolapse.Renderings.addUpdateProfile(profile.profileObservable, self.hideAddEditDialog());
@@ -366,36 +624,60 @@ $(function () {
                 case "camera-template":
                     Octolapse.Cameras.addUpdateProfile(profile.profileObservable, self.hideAddEditDialog());
                     break;
-                case "debug-template":
-                    Octolapse.DebugProfiles.addUpdateProfile(profile.profileObservable, self.hideAddEditDialog());
+                case "logging-profile-template":
+                    Octolapse.LoggingProfiles.addUpdateProfile(profile.profileObservable, self.hideAddEditDialog());
                     break;
                 default:
-                    alert("Cannot save the object, the template (" + profile.templateName + ") is unknown!");
+                    var message = "Cannot save the object, the template (" + profile.templateName + ") is unknown!";
+                    var options = {
+                        title: 'Error Saving Changes',
+                        text: message,
+                        type: 'error',
+                        hide: false,
+                        addclass: "octolapse",
+                        desktop: {
+                            desktop: true
+                        }
+                    };
+                    Octolapse.displayPopup(options);
                     break;
             }
-
         };
-
         /*
             Modal Dialog Functions
         */
         // hide the modal dialog
-        self.hideAddEditDialog = function (sender, event) {
+        self.can_hide = false;
+        self.hideAddEditDialog = function () {
+            //console.log("Add update dialog will be closed.");
+            self.can_hide = true;
             $("#octolapse_add_edit_profile_dialog").modal("hide");
+        };
+        self.cancelAddEditDialog = function () {
+            //console.log("Add update dialog cancelled.");
+            // Hide the dialog
+            self.hideAddEditDialog();
+            // see if the current viewmodel has an on_canceled function
+            if (typeof self.profileObservable().on_cancelled === 'function') {
+                // call the function
+                self.profileObservable().on_cancelled();
+            }
         };
         // show the modal dialog
         self.showAddEditDialog = function (options, sender) {
             // Create all the variables we want to store for callbacks
             //console.log("octolapse.settings.js - Showing add edit dialog.");
             var dialog = this;
+            dialog.can_hide = false;
             dialog.sender = sender;
             dialog.profileObservable = options.profileObservable;
             dialog.templateName = options.templateName;
             dialog.$addEditDialog = $("#octolapse_add_edit_profile_dialog");
             dialog.$addEditForm = dialog.$addEditDialog.find("#octolapse_add_edit_profile_form");
-            dialog.$cancelButton = $("a.cancel", dialog.$addEditDialog);
-            dialog.$saveButton = $("a.save", dialog.$addEditDialog);
-            dialog.$defaultButton = $("a.set-defaults", dialog.$addEditDialog);
+            dialog.$cancelButton = dialog.$addEditForm.find(".modal-footer button.cancel");
+            dialog.$closeIcon = dialog.$addEditForm.find(".modal-header a.close");
+            dialog.$saveButton = dialog.$addEditForm.find(".modal-footer button.save");
+            dialog.$defaultButton = dialog.$addEditForm.find(".modal-footer button.set-defaults");
             dialog.$dialogTitle = $("h3.modal-title", dialog.$addEditDialog);
             dialog.$dialogWarningContainer = $("div.dialog-warning", dialog.$addEditDialog);
             dialog.$dialogWarningText = $("span", dialog.$dialogWarningContainer);
@@ -403,33 +685,34 @@ $(function () {
             dialog.$errorCount = dialog.$summary.find(".error-count");
             dialog.$errorList = dialog.$summary.find("ul.error-list");
             dialog.$modalBody = dialog.$addEditDialog.find(".modal-body");
+            dialog.$modalHeader = dialog.$addEditDialog.find(".modal-header");
+            dialog.$modalFooter = dialog.$addEditDialog.find(".modal-footer");
 
             // Create all of the validation rules
-            var rules = {
+            dialog.rules = {
                 rules: options.validationRules.rules,
                 messages: options.validationRules.messages,
-                ignore: ".ignore_hidden_errors:hidden",
+                ignore: ".ignore_hidden_errors:hidden, .ignore_hidden_errors.hiding",
                 errorPlacement: function (error, element) {
-                    var error_id = $(element).attr("id");
-                    var $field_error = $(".error_label_container[data-error-for='" + error_id + "']");
-                    //console.log("Placing Error, element:" + error_id + ", Error: " + $(error).html());
+                    var error_id = $(element).attr("name");
+                    var $field_error = dialog.$addEditDialog.find(".error_label_container[data-error-for='" + error_id + "']");
                     $field_error.html(error);
                 },
-                unhighlight: function (element, errorClass) {
-                    //$(element).parent().parent().removeClass(errorClass);
-                    var error_id = $(element).attr("id");
-                    var $field_error = $(".error_label_container[data-error-for='" + error_id + "']");
-                    //console.log("Unhighlighting error for element:" + error_id + ", ErrorClass: " + errorClass);
-                    $field_error.addClass("checked");
-                    $field_error.removeClass(errorClass);
-                },
                 highlight: function (element, errorClass) {
-                    //$(element).parent().parent().addClass(errorClass);
-                    var error_id = $(element).attr("id");
-                    var $field_error = $(".error_label_container[data-error-for='" + error_id + "']");
-                    //console.log("Highlighting error for element:" + error_id + ", ErrorClass: " + errorClass);
+                    if (!element)
+                        return;
+                    var error_id = $(element).attr("name");
+                    var $field_error = dialog.$addEditDialog.find(".error_label_container[data-error-for='" + error_id + "']");
                     $field_error.removeClass("checked");
                     $field_error.addClass(errorClass);
+                },
+                unhighlight: function (element, errorClass) {
+                    if (!element)
+                        return;
+                    var error_id = $(element).attr("name");
+                    var $field_error = dialog.$addEditDialog.find(".error_label_container[data-error-for='" + error_id + "']");
+                    $field_error.addClass("checked");
+                    $field_error.removeClass(errorClass);
                 },
                 invalidHandler: function () {
                     //console.log("Invalid!");
@@ -448,38 +731,49 @@ $(function () {
                     $(label).parent().parent().parent().removeClass('error');
                 },
                 onfocusout: function (element, event) {
-                    dialog.validator.form();
-                    /*
-                    return;
+                    setTimeout(function() {
+                        if (dialog.validator)
+                        {
+                            dialog.validator.form();
+                        }
 
-                    var also_validate = $(element).attr("data-also-validate");
-                    if(also_validate)
-                    {
-                        var fields_to_validate = also_validate.split(" ");
-                        fields_to_validate.forEach(function(item){
-                           $("#"+item).valid();
-                        });
-                    }
-
-                    $.validator.defaults.onfocusout.call(this, element, event);
-                    //
-                    */
+                    }, 250);
+                },
+                onclick: function (element, event) {
+                    setTimeout(function(){
+                        dialog.validator.form();
+                        dialog.resize();
+                    }, 250);
                 }
+            };
+
+            dialog.resize = function() {
 
             };
             dialog.validator = null;
-            // configure the modal hidden event.  Isn't it funny that bootstrap's own shortenting of their name is BS?
-            dialog.$addEditDialog.on("hidden.bs.modal", function () {
+
+            // Prevent hiding unless the event was initiated by the hideAddEditDialog function
+            dialog.$addEditDialog.on("hide.bs.modal", function () {
+                //console.log("About to hide add edit dialog");
+                if (!self.can_hide)
+                    return false;
+                //return self.can_hide;
                 // Clear out error summary
                 dialog.$errorCount.empty();
                 dialog.$errorList.empty();
                 dialog.$summary.hide();
                 // Destroy the validator if it exists, both to save on resources, and to clear out any leftover junk.
-                if (dialog.validator != null) {
-                    dialog.validator.destroy();
-                    dialog.validator = null;
+                dialog.unbind_validation();
+                // see if the current viewmodel has an on_closed function
+                if (typeof self.profileObservable().on_closed === 'function')
+                {
+                    // call the function
+                    //console.log("Closing the profile dialog");
+                    self.profileObservable().on_closed();
                 }
             });
+            // configure the modal hidden event.  Isn't it funny that bootstrap's own shortenting of their name is BS?
+
             // configure the dialog show event
             dialog.$addEditDialog.on("show.bs.modal", function () {
                 Octolapse.Settings.AddEditProfile({
@@ -500,31 +794,42 @@ $(function () {
                     dialog.$dialogWarningContainer.show();
 
                 }
-
+/*
                 dialog.$addEditDialog.css({
                     width: 'auto',
                     'margin-left': function () {
                         return -($(this).width() / 2);
                     }
                 });
-
+*/
                 // Initialize the profile.
                 var onShow = Octolapse.Settings.AddEditProfile().profileObservable().onShow;
                 if (typeof onShow == 'function') {
-                    onShow();
+                    onShow(dialog);
                 }
             });
             // Configure the shown event
             dialog.$addEditDialog.on("shown.bs.modal", function () {
-                dialog.validator = dialog.$addEditForm.validate(rules);
-                dialog.validator.form()
+                //console.log("Showing profile settings dialog.");
+                self.can_hide = false;
+                // Unbind all click events
+                dialog.$addEditDialog.unbind('click');
+                // bind any help links
+                dialog.bind_help_links();
+
+                dialog.IsValid = function()
+                {
+                    if (dialog.validator != null)
+                        return dialog.validator.numberOfInvalids() == 0;
+                    return true;
+                };
+
                 // Remove any click event bindings from the cancel button
                 dialog.$cancelButton.unbind("click");
+                dialog.$closeIcon.unbind("click");
                 // Called when the user clicks the cancel button in any add/update dialog
-                dialog.$cancelButton.bind("click", function () {
-                    // Hide the dialog
-                    self.hideAddEditDialog();
-                });
+                dialog.$cancelButton.bind("click", self.cancelAddEditDialog);
+                dialog.$closeIcon.bind("click", self.cancelAddEditDialog);
 
                 // remove any click event bindings from the defaults button
                 dialog.$defaultButton.unbind("click");
@@ -538,6 +843,8 @@ $(function () {
                 dialog.$saveButton.unbind("click");
                 // Called when a user clicks the save button on any add/update dialog.
                 dialog.$saveButton.bind("click", function () {
+                    //console.log("Save button clicked on add/edit profile");
+                    // now see if the form is valid
                     if (dialog.$addEditForm.valid()) {
                         // the form is valid, add or update the profile
                         self.addUpdateProfile(Octolapse.Settings.AddEditProfile());
@@ -560,7 +867,6 @@ $(function () {
                                         $(container).show();
                                     });
                             }
-
                         });
 
                         // The form is invalid, add a shake animation to inform the user
@@ -572,19 +878,64 @@ $(function () {
                     }
 
                 });
+
+                // see if the current viewmodel has an on_opened function
+                if (typeof self.profileObservable().on_opened === 'function'){
+                    // call the function
+                    self.profileObservable().on_opened(dialog);
+                }
+                dialog.bind_validation();
             });
+            dialog.unbind_validation = function()
+            {
+                if (dialog.validator != null) {
+                    //console.log("octolapse.settings.js - Unbinding validation.");
+                    dialog.validator.destroy();
+                    dialog.validator = null;
+                }
+            };
+            dialog.bind_validation = function()
+            {
+                if (dialog.validator != null) {
+                    dialog.unbind_validation();
+                }
+                dialog.validator = dialog.$addEditForm.validate(dialog.rules);
+                dialog.validator.form();
+                // Sometimes the form doesn't display the validation messages below some fields with dynamic IDs
+                // Due to an update of data.  Make sure the validator is called a bit late as a hack fix.
+                // Must investigate this, but probably has something to do with knockout binding templates.
+                setTimeout(function(){
+                    if (dialog.validator != null)
+                    {
+                        dialog.validator.form();
+                    }
+                }, 1000);
+
+            };
+            dialog.bind_help_links = function()
+            {
+                Octolapse.Help.bindHelpLinks("#octolapse_add_edit_profile_dialog");
+            };
             // Open the add/edit profile dialog
-            dialog.$addEditDialog.modal();
+            dialog.$addEditDialog.modal({
+                backdrop: 'static',
+                resize: true,
+                maxHeight: function() {
+                    return Math.max(
+                      window.outerHeight - dialog.$modalHeader.outerHeight()-dialog.$modalFooter.outerHeight()-66,
+                      200
+                    );
+                }
+            });
+
         };
-
-
 
     };
     // Bind the settings view model to the plugin settings element
     OCTOPRINT_VIEWMODELS.push([
         Octolapse.SettingsViewModel
         , ["settingsViewModel", "loginStateViewModel"]
-        , ["#octolapse_plugin_settings", "#octolapse_settings_nav", "#octolapse_about_tab"]
+        , ["#octolapse_plugin_settings", "#octolapse_settings_nav", "#octolapse_about_tab", "#octolapse_settings_title"]
     ]);
 
 

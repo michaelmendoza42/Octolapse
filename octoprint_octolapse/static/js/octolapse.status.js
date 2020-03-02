@@ -22,44 +22,133 @@
 ##################################################################################
 */
 $(function () {
+
+        Octolapse.CurrentSettingViewModel = function(type, values)
+        {
+            var self = this;
+            // defaults
+            self.guid = values.guid;
+            self.name = values.name;
+            self.description = values.description;
+            if (type === "printer")
+            {
+                self.has_been_saved_by_user = values.has_been_saved_by_user;
+            }
+            else if (type === "stabilization")
+            {
+                self.wait_for_moves_to_finish = values.wait_for_moves_to_finish;
+            }
+            else if (type ==="trigger")
+            {
+                self.trigger_type = values.trigger_type;
+            }
+            else if (type === "camera")
+            {
+                self.enabled = ko.observable(values.enabled);
+                self.enable_custom_image_preferences = values.enable_custom_image_preferences
+            }
+        };
+
         Octolapse.StatusViewModel = function () {
             // Create a reference to this object
             var self = this;
             // Add this object to our Octolapse namespace
             Octolapse.Status = this;
             // Assign the Octoprint settings to our namespace
-
             self.is_timelapse_active = ko.observable(false);
             self.is_taking_snapshot = ko.observable(false);
             self.is_rendering = ko.observable(false);
-            self.current_snapshot_time = ko.observable(0);
-            self.total_snapshot_time = ko.observable(0);
             self.snapshot_count = ko.observable(0);
+            self.snapshot_failed_count = ko.observable(0);
             self.snapshot_error = ko.observable(false);
             self.waiting_to_render = ko.observable();
             self.current_printer_profile_guid = ko.observable();
             self.current_stabilization_profile_guid = ko.observable();
+            self.current_trigger_profile_guid = ko.observable();
             self.current_snapshot_profile_guid = ko.observable();
             self.current_rendering_profile_guid = ko.observable();
-            self.current_debug_profile_guid = ko.observable();
+            self.current_logging_profile_guid = ko.observable();
             self.current_settings_showing = ko.observable(true);
             self.profiles = ko.observable({
-                'printers': ko.observableArray([{name: "Unknown", guid: "", has_been_saved_by_user: false}]),
-                'stabilizations': ko.observableArray([{name: "Unknown", guid: ""}]),
-                'snapshots': ko.observableArray([{name: "Unknown", guid: ""}]),
-                'renderings': ko.observableArray([{name: "Unknown", guid: ""}]),
-                'cameras': ko.observableArray([{name: "Unknown", guid: "", enabled: false}]),
-                'debug_profiles': ko.observableArray([{name: "Unknown", guid: ""}])
+                'printers': ko.observableArray([new Octolapse.CurrentSettingViewModel("printer", {name: "Unknown", guid: "", description:"",has_been_saved_by_user: false})]),
+                'stabilizations': ko.observableArray([new Octolapse.CurrentSettingViewModel("stabilization", {name: "Unknown", guid: "", description:""})]),
+                'triggers': ko.observableArray([new Octolapse.CurrentSettingViewModel("trigger", {name: "Unknown", guid: "", description:""})]),
+                'snapshots': ko.observableArray([new Octolapse.CurrentSettingViewModel("snapshot", {name: "Unknown", guid: "", description:""})]),
+                'renderings': ko.observableArray([new Octolapse.CurrentSettingViewModel("rendering", {name: "Unknown", guid: "", description:""})]),
+                'cameras': ko.observableArray([new Octolapse.CurrentSettingViewModel("camera", {name: "Unknown", guid: "", description:"", enabled: false})]),
+                'logging_profiles': ko.observableArray([new Octolapse.CurrentSettingViewModel("logging_profile", {name: "Unknown", guid: "", description:""})])
             });
-
-            self.current_camera_guid = ko.observable()
-            self.PositionState = new Octolapse.positionStateViewModel();
+            self.is_real_time = ko.observable(true);
+            self.is_test_mode_active = ko.observable(false);
+            self.wait_for_moves_to_finish = ko.observable(false);
+            self.current_camera_guid = ko.observable(null);
+            self.dialog_rendering_unfinished = new Octolapse.OctolapseDialogRenderingUnfinished();
+            self.dialog_rendering_in_process = new Octolapse.OctolapseDialogRenderingInProcess();
+            self.timelapse_files_dialog = new Octolapse.OctolapseTimelapseFilesDialog();
+            self.PrinterState = new Octolapse.printerStateViewModel();
             self.Position = new Octolapse.positionViewModel();
             self.ExtruderState = new Octolapse.extruderStateViewModel();
-            self.TriggerState = new Octolapse.triggersStateViewModel();
-            self.IsTabShowing = false;
+            self.TriggerState = new Octolapse.TriggersStateViewModel();
+            self.SnapshotPlanState = new Octolapse.snapshotPlanStateViewModel();
+            self.webcam_settings_popup = new Octolapse.WebcamSettingsPopupViewModel("octolapse_tab_custom_image_preferences_popup");
+            self.SnapshotPlanPreview = new Octolapse.SnapshotPlanPreviewPopupViewModel({
+                on_closed: function(){
+                    self.SnapshotPlanState.is_preview = false;
+                }
+            });
             self.IsLatestSnapshotDialogShowing = false;
+            self.current_print_volume = null;
+            self.current_camera_enabled = ko.observable(false);
+            self.show_play_button = ko.observable(false);
+            self.camera_image_states = {};
+            self.current_camera_state_text = ko.observable("");
+            self.canEditSettings = ko.pureComputed(function(){
+                // Get the current camera profile
+                var current_camera = self.getCurrentProfileByGuid(self.profiles().cameras(),self.current_camera_guid());
+                    if (current_camera != null)
+                    {
+                        return current_camera.enable_custom_image_preferences;
+                    }
+                return false;
+            });
 
+            self.showWebcamSettings = function(){
+                self.webcam_settings_popup.showWebcamSettingsForGuid(self.current_camera_guid());
+            };
+
+            self.openTimelapseFilesDialog = function() {
+                self.timelapse_files_dialog.open();
+            };
+
+            self.getEnabledButtonText = ko.pureComputed(function(){
+                if (Octolapse.Globals.main_settings.is_octolapse_enabled())
+                {
+                    if (self.is_timelapse_active())
+                        return "Plugin Enabled and Running";
+                    else
+                        return "Plugin Enabled";
+                }
+                else{
+                    return "Plugin Disabled";
+                }
+            });
+
+            self.open_rendering_text = ko.pureComputed(function(){
+                if(!self.dialog_rendering_unfinished.is_empty())
+                    return "Failed Renderings";
+                return "Renderings";
+            });
+
+            self.unfinished_renderings_changed = function(data){
+                if (data.failed)
+                {
+                    self.dialog_rendering_unfinished.update(data.failed)
+                }
+                if (data.in_process)
+                {
+                    self.dialog_rendering_in_process.update(data.in_process)
+                }
+            };
 
             self.showLatestSnapshotDialog = function () {
 
@@ -85,11 +174,19 @@ $(function () {
                 });
 
                 // cancel button click handler
-                $SnapshotDialog.find('.cancel').one('click', function () {
+                $SnapshotDialog.find('.cancel').one('click', function(){
+                    closeSnapshotDialog($SnapshotDialog);
+                });
+
+                /*$SnapshotDialog.find('#octolapse_snapshot_image_container').one('click', function() {
+                    closeSnapshotDialog($SnapshotDialog);
+                } );*/
+
+                function closeSnapshotDialog($dialog) {
                     //console.log("Hiding snapshot dialog.");
                     self.IsLatestSnapshotDialogShowing = false;
-                    $SnapshotDialog.modal("hide");
-                });
+                    $dialog.modal("hide");
+                }
 
 
                 self.IsLatestSnapshotDialogShowing = true;
@@ -99,6 +196,7 @@ $(function () {
             };
 
             self.SETTINGS_VISIBLE_KEY = "settings_visible";
+
             self.onBeforeBinding = function () {
                 var settingsVisible = Octolapse.getLocalStorage(self.SETTINGS_VISIBLE_KEY);
                 //console.log("Local Storage for " + self.SETTINGS_VISIBLE_KEY + ": " + settingsVisible);
@@ -115,19 +213,163 @@ $(function () {
             };
 
             self.onAfterBinding = function () {
-                    self.current_settings_showing.subscribe(function (newData) {
+                self.current_settings_showing.subscribe(function (newData) {
                     //console.log("Setting local storage (" + self.SETTINGS_VISIBLE_KEY + ") to " + newData);
-                    Octolapse.setLocalStorage(self.SETTINGS_VISIBLE_KEY,newData)
+                    Octolapse.setLocalStorage(self.SETTINGS_VISIBLE_KEY, newData)
                 });
+                self.dialog_rendering_in_process.on_after_binding();
+                self.dialog_rendering_unfinished.on_after_binding();
+                self.timelapse_files_dialog.on_after_binding();
+                Octolapse.Help.bindHelpLinks("#octolapse_tab");
+            };
+
+            // Update the current tab state
+            self.updateState = function(state){
+                //console.log("octolapse.status.js - Updating State")
+                if (state.trigger_type != null)
+                    self.is_real_time(state.trigger_type === "real-time");
+
+                if (state.position != null) {
+                    self.Position.update(state.position);
+                }
+                if (state.printer_state != null) {
+                    self.PrinterState.update(state.printer_state);
+                }
+                if (state.extruder != null) {
+                    self.ExtruderState.update(state.extruder);
+                }
+                if (state.trigger_state != null) {
+                    self.TriggerState.update(state.trigger_state);
+                }
+                if (state.snapshot_plan != null) {
+                    self.SnapshotPlanState.update(state.snapshot_plan);
+                }
+
+            };
+
+            self.create_current_settings_profile = function(type, values){
+                var profiles = [];
+                if (values)
+                {
+                    for (var index=0; index < values.length; index++)
+                    {
+                        profiles.push(new Octolapse.CurrentSettingViewModel(type, values[index]))
+                    }
+                }
+                return profiles;
+            };
+
+            self.load_files = function(){
+                //console.log("ocotlapse.status.js - loading dialog files.");
+                self.timelapse_files_dialog.load();
+                self.dialog_rendering_in_process.load();
+                self.dialog_rendering_unfinished.load();
+            };
+
+            self.files_changed = function(file_info, action){
+                self.timelapse_files_dialog.files_changed(file_info, action);
+            };
+
+            self.update = function (settings) {
+                //console.log("octolapse.status.js - Updating main settings.");
+                if (settings.is_timelapse_active !== undefined)
+                    self.is_timelapse_active(settings.is_timelapse_active);
+                if (settings.snapshot_count !== undefined)
+                    self.snapshot_count(settings.snapshot_count);
+                if (settings.snapshot_failed_count !== undefined)
+                    self.snapshot_failed_count(settings.snapshot_failed_count);
+                if (settings.is_taking_snapshot !== undefined)
+                    self.is_taking_snapshot(settings.is_taking_snapshot);
+                if (settings.is_rendering !== undefined)
+                    self.is_rendering(settings.is_rendering);
+                if (settings.waiting_to_render !== undefined)
+                    self.waiting_to_render(settings.waiting_to_render);
+                if (settings.is_test_mode_active !== undefined)
+                    self.is_test_mode_active(settings.is_test_mode_active);
+
+                //console.log("Updating Profiles");
+                if (settings.profiles) {
+                    self.profiles().printers(self.create_current_settings_profile("printer", settings.profiles.printers));
+                    self.profiles().stabilizations(self.create_current_settings_profile("stabilization", settings.profiles.stabilizations));
+                    self.profiles().triggers(self.create_current_settings_profile("trigger", settings.profiles.triggers));
+                    self.profiles().renderings(self.create_current_settings_profile("rendering", settings.profiles.renderings));
+                    self.profiles().cameras(self.create_current_settings_profile("camera", settings.profiles.cameras));
+                    self.profiles().logging_profiles(self.create_current_settings_profile("logging_profile", settings.profiles.logging_profiles));
+                    self.current_printer_profile_guid(settings.profiles.current_printer_profile_guid);
+                    self.current_stabilization_profile_guid(settings.profiles.current_stabilization_profile_guid);
+                    self.current_trigger_profile_guid(settings.profiles.current_trigger_profile_guid);
+                    self.current_snapshot_profile_guid(settings.profiles.current_snapshot_profile_guid);
+                    self.current_rendering_profile_guid(settings.profiles.current_rendering_profile_guid);
+                    self.current_logging_profile_guid(settings.profiles.current_logging_profile_guid);
+                }
+                if (settings.unfinished_renderings)
+                {
+                    self.dialog_rendering_in_process.update(settings.unfinished_renderings);
+                    self.dialog_rendering_unfinished.update(settings.unfinished_renderings);
+                }
+
+                self.is_real_time(self.getCurrentTriggerProfileIsRealTime());
+                self.current_camera_guid(self.getInitialCameraSelection());
+                self.set_current_camera_enabled();
+            };
+
+            self.current_stabilization_profile_guid.subscribe(function(newValue){
+                var current_stabilization_profile = null;
+                for (var i = 0; i < self.profiles().stabilizations().length; i++) {
+                    var stabilization_profile = self.profiles().stabilizations()[i];
+                    if (stabilization_profile.guid == self.current_stabilization_profile_guid()) {
+                        current_stabilization_profile = stabilization_profile;
+                        break;
+                    }
+                }
+                if (current_stabilization_profile)
+                    self.wait_for_moves_to_finish(current_stabilization_profile.wait_for_moves_to_finish);
+                else
+                    self.wait_for_moves_to_finish(false);
+            });
 
 
-            }
 
-            self.hasOneCameraEnabled = ko.pureComputed(function(){
-                var hasConfigIssue = true;
+            // Subscribe to current camera guid changes
+            self.current_camera_guid.subscribe(function(newValue){
+                self.snapshotCameraChanged();
+            });
+
+            self.getInitialCameraSelection = function (){
+                // See if the previous camera is in the list.  If so, select it.
+                var guid = Octolapse.getLocalStorage('previous-camera-guid');
+
                 for (var i = 0; i < self.profiles().cameras().length; i++)
                 {
-                    if(self.profiles().cameras()[i].enabled)
+                    var camera_profile = self.profiles().cameras()[i];
+                    if(camera_profile.guid == guid)
+                    {
+                        self.current_camera_guid(camera_profile.guid);
+                        return camera_profile.guid;
+                    }
+                }
+                // This guid doesn't exist, get the first enabled camera
+                for (var i = 0; i < self.profiles().cameras().length; i++)
+                {
+                    var camera_profile = self.profiles().cameras()[i];
+                    if(camera_profile.enabled)
+                    {
+                        self.current_camera_guid(camera_profile.guid);
+                        return camera_profile.guid;
+                    }
+                }
+                // No enabled camera, just get the first camera
+                if(self.profiles().cameras().length>0)
+                    return self.profiles().cameras()[0].guid;
+                // Just set it to null, no camera available.
+                return null;
+
+            };
+
+            self.hasOneCameraEnabled = ko.pureComputed(function(){
+                for (var i = 0; i < self.profiles().cameras().length; i++)
+                {
+                    if(self.profiles().cameras()[i].enabled())
                     {
                         return true
                     }
@@ -135,6 +377,10 @@ $(function () {
                 return false;
 
             },this);
+
+            self.hasPrinters = ko.pureComputed(function() {
+                return self.profiles().printers().length > 0;
+            });
 
             self.hasPrinterSelected = ko.pureComputed(function(){
                 return ! (Octolapse.Status.current_printer_profile_guid() == null || Octolapse.Status.current_printer_profile_guid()=="");
@@ -144,9 +390,17 @@ $(function () {
                 //console.log("detecting configured printers.")
                 var current_printer = self.getCurrentProfileByGuid(self.profiles().printers(),Octolapse.Status.current_printer_profile_guid());
                 if (current_printer != null)
-                    return current_printer.has_been_saved_by_user;
+                    return self.is_timelapse_active() || current_printer.slicer_type == 'automatic' || current_printer.has_been_saved_by_user;
                 return true;
             },this);
+
+            self.getCurrentTriggerProfileIsRealTime = function(){
+                var current_trigger = self.getCurrentProfileByGuid(self.profiles().triggers(),Octolapse.Status.current_trigger_profile_guid());
+                if (current_trigger  != null)
+                    //console.log(current_trigger.trigger_type);
+                    return current_trigger.trigger_type === "real-time";
+                return true;
+            };
 
             self.getCurrentProfileByGuid = function(profiles, guid){
                 if (guid != null) {
@@ -157,25 +411,13 @@ $(function () {
                     }
                 }
                 return null;
-            }
+            };
+
             self.hasConfigIssues = ko.computed(function(){
                 var hasConfigIssues = !self.hasOneCameraEnabled() || !self.hasPrinterSelected() || !self.has_configured_printer_profile();
                 return hasConfigIssues;
             },this);
 
-
-            self.onTabChange = function (current, previous) {
-                if (current != null && current === "#tab_plugin_octolapse") {
-                    //console.log("Octolapse Tab is showing");
-                    self.IsTabShowing = true;
-                    self.updateLatestSnapshotThumbnail(true);
-
-                }
-                else if (previous != null && previous === "#tab_plugin_octolapse") {
-                    //console.log("Octolapse Tab is not showing");
-                    self.IsTabShowing = false;
-                }
-            };
             /*
                 Snapshot client animation preview functions
             */
@@ -183,80 +425,138 @@ $(function () {
                 isThumbnail = isThumbnail || false;
                 //console.log("Refreshing Snapshot Thumbnail");
                 if (isThumbnail)
-                    self.updateLatestSnapshotThumbnail(true);
+                    self.updateLatestSnapshotThumbnail(true, true);
                 else
-                    self.updateLatestSnapshotImage(true);
+                    self.updateLatestSnapshotImage(true, true);
             };
 
             self.startSnapshotAnimation = function (targetId) {
-                //console.log("Refreshing Snapshot Thumbnail");
-                // Hide and show the play/refresh button
-                if (Octolapse.Globals.auto_reload_latest_snapshot()) {
-                    $('#' + targetId + ' .snapshot_refresh_container a.start-animation').fadeOut();
+                if (targetId in self.IsAnimating && self.IsAnimating[targetId]) {
+                    return;
                 }
+                //console.log("Starting Snapshot Animation for" + targetId);
+                // Hide and show the play/refresh button
+                if (Octolapse.Globals.main_settings.auto_reload_latest_snapshot()) {
+                    var $startAnimationButton = $('#' + targetId + ' .octolapse-snapshot-button-overlay a.play');
+                    self.IsAnimating[targetId] = true;
+                    $startAnimationButton.fadeOut({
+                        start: function () {
+                            setTimeout( function() {
+                                var $images = $('#' + targetId + ' .snapshot-container .previous-snapshots img');
+                                var $current = $('#' + targetId + ' .snapshot-container .latest-snapshot img');
+                                // Hide all images in reverse order
+                                if ($images.length > 0)
+                                {
+                                    $current.css("opacity","0");
+                                    animate_snapshots($images, $current, $images.length-1, -1, 0, 25)
+                                }
+                                else
+                                {
+                                    $current.css("opacity","1");
+                                    $startAnimationButton.fadeIn();
+                                    self.IsAnimating[targetId] = false;
+                                    return;
+                                }
+                                function animate_snapshots($images, $current, index, step, opacity, delay) {
+                                    if (
+                                        (step > 0 && index < $images.length) ||
+                                        (step < 0 && index > 0)
+                                    )
+                                    {
+                                        setTimeout(function () {
+                                            $images.eq(index).css("opacity",opacity.toString());
+                                            animate_snapshots($images, $current, index+step, step, opacity, delay)
+                                        }, delay);
+                                    }
+                                    else if(step > 0)
+                                    {
+                                        if($current) {
+                                            $current.css("opacity","1");
+                                            $startAnimationButton.fadeIn();
+                                            self.IsAnimating[targetId] = false;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // fade out the current image
+                                        animate_snapshots($images, $current, 0, 1, 1, 100);
+                                    }
 
+                                }
+                            }, 100);
 
-                //console.log("Starting animation on " + targetId);
-                // Get the images
-                var $images = $('#' + targetId + ' .snapshot_container .previous-snapshots img');
-                // Remove any existing visible class
-                $images.each(function (index, element) {
-                    $(element).removeClass('visible');
-                });
-                // Set a delay to unblock
-                setTimeout(function () {
-                    // Remove any hidden class and add visible to trigger the animation.
-                    $images.each(function (index, element) {
-                        $(element).removeClass('hidden');
-                        $(element).addClass('visible');
+                        }
                     });
-                    if (Octolapse.Globals.auto_reload_latest_snapshot()) {
-                        $('#' + targetId + ' .snapshot_refresh_container a.start-animation').fadeIn();
-                    }
-                }, 1)
-
+                }
             };
 
-            self.updateLatestSnapshotThumbnail = function (force) {
+            self.updateLatestSnapshotThumbnail = function (force, updateIfDisabled) {
+                if (!updateIfDisabled && !self.current_camera_enabled())
+                    return;
                 force = force || false;
                 //console.log("Trying to update the latest snapshot thumbnail.");
                 if (!force) {
-                    if (!self.IsTabShowing) {
-                        //console.log("The tab is not showing, not updating the thumbnail.  Clearing the image history.");
-                        return
-                    }
-                    else if (!Octolapse.Globals.auto_reload_latest_snapshot()) {
+                    if (!Octolapse.Globals.main_settings.auto_reload_latest_snapshot()) {
                         //console.log("Not updating the thumbnail, auto-reload is disabled.");
                         return
                     }
                 }
-                self.updateSnapshotAnimation('octolapse_snapshot_thumbnail_container', getLatestSnapshotThumbnailUrl(self.current_camera_guid())
-                    + "&time=" + new Date().getTime());
 
+                var snapshotUrl = null;
+                if (self.current_camera_guid())
+                {
+                    snapshotUrl = getLatestSnapshotThumbnailUrl(self.current_camera_guid())+ "&time=" + new Date().getTime();
+                }
+
+                self.updateSnapshotAnimation('octolapse_snapshot_thumbnail_container', snapshotUrl);
+            };
+
+            self.updateLatestSnapshotImage = function (force) {
+                force = force || false;
+                //console.log("Trying to update the latest snapshot image.");
+                if (!force) {
+                    if (!Octolapse.Globals.main_settings.auto_reload_latest_snapshot()) {
+                        //console.log("Auto-Update latest snapshot image is disabled.");
+                        return;
+                    }
+                    else if (!self.IsLatestSnapshotDialogShowing) {
+                        //console.log("The full screen dialog is not showing, not updating the latest snapshot.");
+                        return;
+                    }
+                }
+                var snapshotUrl = null;
+                if (self.current_camera_guid())
+                {
+                    snapshotUrl = getLatestSnapshotUrl(self.current_camera_guid())+ "&time=" + new Date().getTime();
+                }
+                self.updateSnapshotAnimation('octolapse_snapshot_image_container', snapshotUrl);
             };
 
             self.erasePreviousSnapshotImages = function (targetId, eraseCurrentImage) {
                 eraseCurrentImage = eraseCurrentImage || false;
                 if (eraseCurrentImage) {
-                    $('#' + targetId + ' .snapshot_container .latest-snapshot img').each(function () {
+                    $('#' + targetId + ' .snapshot-container .latest-snapshot img').each(function () {
                         $(this).remove();
                     });
                 }
-                $('#' + targetId + ' .snapshot_container .previous-snapshots img').each(function () {
+                $('#' + targetId + ' .snapshot-container .previous-snapshots img').each(function () {
                     $(this).remove();
                 });
             };
 
             // takes the list of images, update the frames in the target accordingly and starts any animations
-            self.IsAnimating = false;
+            self.IsAnimating = {};
+
             self.updateSnapshotAnimation = function (targetId, newSnapshotAddress) {
                 //console.log("Updating animation for target id: " + targetId);
-                // Get the snapshot_container within the target
-                var $target = $('#' + targetId + ' .snapshot_container');
+                // Get the snapshot-container within the target
+                var $target = $('#' + targetId + ' .snapshot-container');
                 // Get the latest image
                 var $latestSnapshotContainer = $target.find('.latest-snapshot');
                 var $latestSnapshot = $latestSnapshotContainer.find('img');
-                if (Octolapse.Globals.auto_reload_latest_snapshot()) {
+                var $fullscreenControl = $target.find("a.octolapse-fullscreen");
+
+                if (Octolapse.Globals.main_settings.auto_reload_latest_snapshot()) {
                     // Get the previous snapshot container
                     var $previousSnapshotContainer = $target.find('.previous-snapshots');
 
@@ -272,125 +572,139 @@ $(function () {
                             $latestSnapshot.remove();
                         }
                     }
-
                     // Get all of the images within the $previousSnapshotContainer, included the latest image we copied in
                     var $previousSnapshots = $previousSnapshotContainer.find("img");
 
                     var numSnapshots = $previousSnapshots.length;
-
-                    while (numSnapshots > parseInt(Octolapse.Globals.auto_reload_frames())) {
+                    self.show_play_button(numSnapshots>0);
+                    while (numSnapshots > parseInt(Octolapse.Globals.main_settings.auto_reload_frames())) {
                         //console.log("Removing overflow previous images according to Auto Reload Frames setting.");
                         var $element = $previousSnapshots.first();
                         $element.remove();
 
                         numSnapshots--;
                     }
-
-                    // Set the total animation duration based on the number of snapshots
-                    $previousSnapshotContainer.removeClass().addClass('previous-snapshots snapshot-animation-duration-' + numSnapshots);
-
-                    // TODO: Do we need to do this??  Find out
                     $previousSnapshots = $previousSnapshotContainer.find("img");
                     var numPreviousSnapshots = $previousSnapshots.length;
                     var newestImageIndex = numPreviousSnapshots - 1;
                     //console.log("Updating classes for previous " + numPreviousSnapshots + " images.");
                     for (var previousImageIndex = 0; previousImageIndex < numPreviousSnapshots; previousImageIndex++) {
                         $element = $($previousSnapshots.eq(previousImageIndex));
-                        $element.removeClass();
-                        if (previousImageIndex === newestImageIndex) {
-                            //console.log("Updating classes for the newest image.");
-                            $element.addClass("newest");
-                        }
-                        else {
-                            $element.addClass("hidden");
-                        }
-                        var previousImageDelayClass = "effect-delay-" + previousImageIndex;
                         //console.log("Updating classes for the previous image delay " + previousImageDelayClass+ ".");
-                        $element.addClass(previousImageDelayClass);
-
-
+                        $element.css('z-index', previousImageIndex.toString());
                     }
-
                 }
-
-
+                else
+                {
+                    self.show_play_button(false);
+                }
                 // create the newest image
                 var $newSnapshot = $(document.createElement('img'));
-                // append the image to the container
+
+                self.current_camera_state_text("");
+                $fullscreenControl.hide();
+                // Set the error handler
+                var error_message = "No snapshots have been taken with with the current camera.  A preview of your" +
+                    " timelapse will start to appear here as snapshots are taken by Octolapse.";
+                var on_snapshot_load_error = function(){
+                    //console.error("An error occurred loading the newest image, reverting to previous image.");
+                    // move the latest preview image back into the newest image section
+                    $latestSnapshot.removeClass();
+                    $latestSnapshot.appendTo($latestSnapshotContainer);
+                    self.current_camera_state_text(error_message);
+
+                };
+
+                if (!newSnapshotAddress)
+                {
+                    error_message = "No camera is selected.  Choose a camera in the dropdown below.";
+                    on_snapshot_load_error(error_message);
+                    return;
+                }
+
+                $newSnapshot.one('error', on_snapshot_load_error);
 
                 //console.log("Adding the new snapshot image to the latest snapshot container.");
                 // create on load event for the newest image
-                if (Octolapse.Globals.auto_reload_latest_snapshot()) {
+                if (Octolapse.Globals.main_settings.auto_reload_latest_snapshot()) {
                     // Add the new snapshot to the container
                     $newSnapshot.appendTo($latestSnapshotContainer);
-                    $newSnapshot.one('load', function () {
-                        self.IsAnimating = false;
-                        self.startSnapshotAnimation(targetId);
-                    });
-                    // create an error handler for the newest image
-
+                    if ((!(targetId in self.IsAnimating) || !self.IsAnimating[targetId]))
+                    {
+                        $newSnapshot.one('load', function () {
+                            self.startSnapshotAnimation(targetId);
+                            $fullscreenControl.show();
+                        });
+                    }
+                    else {
+                        // We could have a race condition here.  Need to ensure the opacity of this element is
+                        // set to 1 after any animations are finished.
+                        $newSnapshot.css("opacity","0");
+                    }
                 }
                 else {
-
                     $newSnapshot.one('load', function () {
+                        $fullscreenControl.show();
                         // Hide the latest image
-                        $latestSnapshot.fadeOut(250, function () {
-                            // Remove the latest image
-                            $latestSnapshot.remove();
+                        if ($latestSnapshot.length == 1)
+                        {
+                            $latestSnapshot.fadeOut(250, function () {
+                                // Remove the latest image
+                                if($latestSnapshot.length)
+                                    $latestSnapshot.remove();
+                                // Set the new snapshot to hidden initially
+                                $newSnapshot.css('display', 'none');
+                                // Add the new snapshot to the container
+                                $newSnapshot.appendTo($latestSnapshotContainer);
+                                // fade it in.  Ahhh..
+                                $newSnapshot.fadeIn(250);
+                            });
+                        }
+                        else
+                        {
                             // Set the new snapshot to hidden initially
                             $newSnapshot.css('display', 'none');
                             // Add the new snapshot to the container
                             $newSnapshot.appendTo($latestSnapshotContainer);
                             // fade it in.  Ahhh..
                             $newSnapshot.fadeIn(250);
-                        });
+                        }
                     });
-
-
                 }
-                $newSnapshot.one('error', function () {
-                    //console.log("An error occurred loading the newest image, reverting to previous image.");
-                    // move the latest preview image back into the newest image section
-                    self.IsAnimating = false;
-                    $latestSnapshot.removeClass();
-                    $newSnapshot.addClass('latest');
-                    $latestSnapshot.appendTo($latestSnapshotContainer)
-
-                });
-
-                // set the class
-                $newSnapshot.addClass('latest');
                 // set the src and start to load
                 $newSnapshot.attr('src', newSnapshotAddress)
             };
 
-            self.updateLatestSnapshotImage = function (force) {
-                force = force || false;
-                //console.log("Trying to update the latest snapshot image.");
-                if (!force) {
-                    if (!Octolapse.Globals.auto_reload_latest_snapshot()) {
-                        //console.log("Auto-Update latest snapshot image is disabled.");
-                        return
-                    }
-                    else if (!self.IsLatestSnapshotDialogShowing) {
-                        //console.log("The full screen dialog is not showing, not updating the latest snapshot.");
-                        return
-                    }
-                }
-                //console.log("Requesting image for camera:" + Octolapse.Status.current_camera_guid())
-                self.updateSnapshotAnimation('octolapse_snapshot_image_container', getLatestSnapshotUrl(Octolapse.Status.current_camera_guid()) + "&time=" + new Date().getTime());
-
-            };
-
-            self.toggleInfoPanel = function (panelType){
+            self.toggleInfoPanel = function (observable, panelType){
+                data = {
+                    panel_type: panelType,
+                    client_id: Octolapse.Globals.client_id
+                };
                 $.ajax({
                     url: "./plugin/octolapse/toggleInfoPanel",
                     type: "POST",
-                    data: JSON.stringify({panel_type: panelType}),
+                    data: JSON.stringify(data),
                     contentType: "application/json",
                     dataType: "json",
+                    success: function(result){
+                        if (result.success)
+                        {
+                            observable(result.enabled);
+                        }
+                    },
                     error: function (XMLHttpRequest, textStatus, errorThrown) {
-                        alert("Unable to toggle the panel.  Status: " + textStatus + ".  Error: " + errorThrown);
+                        var message = "Unable to toggle the panel.  Status: " + textStatus + ".  Error: " + errorThrown;
+                        var options = {
+                            title: 'Info Panel Toggle Error',
+                            text: message,
+                            type: 'error',
+                            hide: false,
+                            addclass: "octolapse",
+                            desktop: {
+                                desktop: true
+                            }
+                        };
+                        Octolapse.displayPopup(options);
                     }
                 });
             };
@@ -398,7 +712,7 @@ $(function () {
             /**
              * @return {string}
              */
-            self.GetTriggerStateTemplate = function (type) {
+            self.getTriggerStateTemplate = function (type) {
                 switch (type) {
                     case "gcode":
                         return "gcode-trigger-status-template";
@@ -417,99 +731,44 @@ $(function () {
                         return "Octolapse is waiting for print to complete.";
                     if( self.is_rendering())
                         return "Octolapse is rendering a timelapse.";
-                    if(!Octolapse.Globals.enabled())
+                    if(!Octolapse.Globals.main_settings.is_octolapse_enabled())
                         return 'Octolapse is disabled.';
                     return 'Octolapse is enabled and idle.';
                 }
-                if(!Octolapse.Globals.enabled())
+                if(!Octolapse.Globals.main_settings.is_octolapse_enabled())
                     return 'Octolapse is disabled.';
-                if(!self.PositionState.IsInitialized())
-                    return 'Octolapse is waiting for more information from the server.';
-                if( self.PositionState.hasPositionStateErrors())
-                    return 'Octolapse is waiting to initialize.';
+                if(Octolapse.Status.is_real_time())
+                {
+                    if(! self.PrinterState.is_initialized())
+                        return 'Octolapse is waiting for more information from the server.';
+                    if( self.PrinterState.hasPrinterStateErrors())
+                        return 'Octolapse is waiting to initialize.';
+                }
                 if( self.is_taking_snapshot())
                     return "Octolapse is taking a snapshot.";
                 return "Octolapse is waiting to take snapshot.";
 
             }, self);
-            self.getTimelapseStateText =  ko.pureComputed(function () {
-                //console.log("GettingTimelapseStateText")
-                if(!self.is_timelapse_active())
-                    return 'Octolapse is not running';
-                if(!self.PositionState.IsInitialized())
-                    return 'Waiting for update from server.  You may have to turn on the "Position State Info Panel" from the "Current Settings" below to receive an update.';
-                if( self.PositionState.hasPositionStateErrors())
-                    return 'Waiting to initialize';
-                return 'Octolapse is initialized and running';
-            }, self);
-
-            self.getTimelapseStateColor =  ko.pureComputed(function () {
-                if(!self.is_timelapse_active())
-                    return '';
-                if(!self.PositionState.IsInitialized() || self.PositionState.hasPositionStateErrors())
-                    return 'orange';
-                return 'greenyellow';
-            }, self);
 
             self.getStatusText = ko.pureComputed(function () {
-                if (self.is_timelapse_active())
-                    return 'Octolapse - Running';
-                if (self.is_rendering())
-                    return 'Octolapse - Rendering';
+                if (self.is_timelapse_active() || self.is_rendering())
+                    return '';
                 if (self.waiting_to_render())
-                    return 'Octolapse - Waiting to Render';
-                if (Octolapse.Globals.enabled())
-                    return 'Octolapse';
-                return 'Octolapse - Disabled';
+                    return 'Timelapse Canceled';
+                return '';
             }, self);
 
-            self.updatePositionState = function (state) {
-                // State variables
-                self.PositionState.update(state);
-            };
+            self.previewSnapshotPlans = function(data){
+                //console.log("Updating snapshot plan state with a preview of the snapshot plans");
+                self.SnapshotPlanState.is_preview = true;
+                self.SnapshotPlanState.update(data);
+                self.SnapshotPlanPreview.openDialog();
 
-            self.updatePosition = function (state) {
-                // State variables
-                self.Position.update(state);
-            };
-
-            self.updateExtruderState = function (state) {
-                // State variables
-                self.ExtruderState.update(state);
-            };
-
-            self.updateTriggerStates = function (states) {
-                self.TriggerState.update(states);
-            };
-
-            self.update = function (settings) {
-                self.is_timelapse_active(settings.is_timelapse_active);
-                self.snapshot_count(settings.snapshot_count);
-                self.is_taking_snapshot(settings.is_taking_snapshot);
-                self.is_rendering(settings.is_rendering);
-                self.total_snapshot_time(settings.total_snapshot_time);
-                self.current_snapshot_time(settings.current_snapshot_time);
-                self.waiting_to_render(settings.waiting_to_render);
-                //console.log("Updating Profiles");
-                self.profiles().printers(settings.profiles.printers);
-                self.profiles().stabilizations(settings.profiles.stabilizations);
-                self.profiles().snapshots(settings.profiles.snapshots);
-                self.profiles().renderings(settings.profiles.renderings);
-                self.profiles().cameras(settings.profiles.cameras);
-                self.profiles().debug_profiles(settings.profiles.debug_profiles);
-                self.current_printer_profile_guid(settings.profiles.current_printer_profile_guid);
-                self.current_stabilization_profile_guid(settings.profiles.current_stabilization_profile_guid);
-                self.current_snapshot_profile_guid(settings.profiles.current_snapshot_profile_guid);
-                self.current_rendering_profile_guid(settings.profiles.current_rendering_profile_guid);
-                self.current_debug_profile_guid(settings.profiles.current_debug_profile_guid);
-                // Only update the current camera guid if there is no value
-                if(self.current_camera_guid() == null)
-                    self.current_camera_guid(settings.profiles.current_camera_profile_guid);
             };
 
             self.onTimelapseStart = function () {
                 self.TriggerState.removeAll();
-                self.PositionState.IsInitialized(false);
+                self.PrinterState.is_initialized(false);
             };
 
             self.onTimelapseStop = function () {
@@ -521,7 +780,9 @@ $(function () {
             self.stopTimelapse = function () {
                 if (Octolapse.Globals.is_admin()) {
                     //console.log("octolapse.status.js - ButtonClick: StopTimelapse");
-                    if (confirm("Warning: You cannot restart octolapse once it is stopped until the next print.  Do you want to stop Octolapse?")) {
+                    var message = "Warning: You cannot restart octolapse once it is stopped until the next print." +
+                        "  Do you want to stop Octolapse?";
+                    if (confirm(message)) {
                         $.ajax({
                             url: "./plugin/octolapse/stopTimelapse",
                             type: "POST",
@@ -530,17 +791,22 @@ $(function () {
                                 //console.log("octolapse.status.js - stopTimelapse - success" + data);
                             },
                             error: function (XMLHttpRequest, textStatus, errorThrown) {
-                                alert("Unable to stop octolapse!.  Status: " + textStatus + ".  Error: " + errorThrown);
+                                var message = "Unable to stop octolapse!.  Status: " + textStatus + ".  Error: " + errorThrown;
+                                var options = {
+                                    title: 'Stop Timelapse Error',
+                                    text: message,
+                                    type: 'error',
+                                    hide: false,
+                                    addclass: "octolapse",
+                                    desktop: {
+                                        desktop: true
+                                    }
+                                };
+                                Octolapse.displayPopup(options);
                             }
                         });
                     }
                 }
-            };
-
-            self.snapshotTime = function () {
-                var date = new Date(null);
-                date.setSeconds(this.total_snapshot_time());
-                return date.toISOString().substr(11, 8);
             };
 
             self.navbarClicked = function () {
@@ -557,11 +823,26 @@ $(function () {
                     });
             };
 
+            // Octolapse settings link
+            self.openOctolapseSettings = function(profile_type) {
+                $('a#navbar_show_settings').click();
+                $('li#settings_plugin_octolapse_link a').click();
+                if(profile_type)
+                {
+                    var query= "#octolapse_settings_nav a[data-profile-type='"+profile_type+"']";
+                    $(query).click();
+                }
+            };
             // Printer Profile Settings
             self.printers_sorted = ko.computed(function() { return self.nameSort(self.profiles().printers) });
+
             self.openCurrentPrinterProfile = function () {
                 //console.log("Opening current printer profile from tab.")
                 Octolapse.Printers.showAddEditDialog(self.current_printer_profile_guid(), false);
+            };
+            self.createNewPrinterProfile = function () {
+                //console.log("Opening current printer profile from tab.")
+                Octolapse.Printers.showAddEditDialog(null, false);
             };
             self.defaultPrinterChanged = function (obj, event) {
                 if (Octolapse.Globals.is_admin()) {
@@ -593,19 +874,20 @@ $(function () {
                 }
             };
 
-            // Snapshot Profile Settings
-            self.snapshots_sorted = ko.computed(function() { return self.nameSort(self.profiles().snapshots) });
-            self.openCurrentSnapshotProfile = function () {
-                //console.log("Opening current snapshot profile from tab.")
-                Octolapse.Snapshots.showAddEditDialog(self.current_snapshot_profile_guid(), false);
+
+            // Trigger Profile Settings
+            self.triggers_sorted = ko.computed(function() { return self.nameSort(self.profiles().triggers) });
+            self.openCurrentTriggerProfile = function () {
+                //console.log("Opening current trigger profile from tab.")
+                Octolapse.Triggers.showAddEditDialog(self.current_trigger_profile_guid(), false);
             };
-            self.defaultSnapshotChanged = function (obj, event) {
+            self.defaultTriggerChanged = function (obj, event) {
                 if (Octolapse.Globals.is_admin()) {
                     if (event.originalEvent) {
                         // Get the current guid
-                        var guid = $("#octolapse_tab_snapshot_profile").val();
-                        //console.log("Default Snapshot is changing to " + guid);
-                        Octolapse.Snapshots.setCurrentProfile(guid);
+                        var guid = $("#octolapse_tab_trigger_profile").val();
+                        //console.log("Default trigger is changing to " + guid + " from " + self.current_trigger_profile_guid());
+                        Octolapse.Triggers.setCurrentProfile(guid);
                         return true;
                     }
                 }
@@ -631,115 +913,150 @@ $(function () {
 
             // Camera Profile Settings
             self.cameras_sorted = ko.computed(function() { return self.nameSort(self.profiles().cameras) });
-
             self.openCameraProfile = function (guid) {
                 //console.log("Opening current camera profile from tab.")
                 Octolapse.Cameras.showAddEditDialog(guid, false);
             };
-
             self.addNewCameraProfile = function () {
                 //console.log("Opening current camera profile from tab.")
                 Octolapse.Cameras.showAddEditDialog(null, false);
             };
-
             self.toggleCamera = function (guid) {
                 //console.log("Opening current camera profile from tab.")
-                Octolapse.Cameras.getProfileByGuid(guid).toggleCamera();
+                Octolapse.Cameras.getProfileByGuid(guid).toggleCamera(function(value){
+                    self.getCurrentProfileByGuid(self.profiles().cameras(), guid).enabled(value);
+                });
             };
-            self.snapshotCameraChanged = function(obj, event) {
-                // Update the current camera profile
-                var guid = $("#octolapse_current_snapshot_camera").val();
-                //console.log("Updating current snapshot camera preview: " + guid)
-                if(event.originalEvent) {
-                    if (Octolapse.Globals.is_admin()) {
-                        var data = {'guid': guid};
-                        $.ajax({
-                            url: "./plugin/octolapse/setCurrentCameraProfile",
-                            type: "POST",
-                            data: JSON.stringify(data),
-                            contentType: "application/json",
-                            dataType: "json",
-                            success: function (result) {
-                                // Set the current profile guid observable.  This will cause the UI to react to the change.
-                                //console.log("current profile guid updated: " + result.guid)
-                            },
-                            error: function (XMLHttpRequest, textStatus, errorThrown) {
-                                alert("Unable to set the current camera profile!.  Status: " + textStatus + ".  Error: " + errorThrown);
-                            }
-                        });
+            self.set_current_camera_enabled = function() {
+                var current_camera = null;
+                for (var i = 0; i < self.profiles().cameras().length; i++) {
+                    var camera_profile = self.profiles().cameras()[i];
+                    if (camera_profile.guid == self.current_camera_guid()) {
+                        current_camera = camera_profile;
+                        break;
                     }
                 }
+                if (current_camera)
+                    self.current_camera_enabled(current_camera.enabled());
+                else
+                    self.current_camera_enabled(true);
+            };
+            self.snapshotCameraChanged = function() {
+                if (self.current_camera_guid()) {
+                    // Set the local storage guid here.
+                    Octolapse.setLocalStorage('previous-camera-guid', self.current_camera_guid());
+                    self.current_camera_enabled(true);
+                }
 
+                self.set_current_camera_enabled();
+                // Update the current camera profile
+                var guid = self.current_camera_guid();
                 //console.log("Updating the latest snapshot from: " + Octolapse.Status.current_camera_guid() + " to " + guid);
-                Octolapse.Status.current_camera_guid(guid);
                 self.erasePreviousSnapshotImages('octolapse_snapshot_image_container',true);
                 self.erasePreviousSnapshotImages('octolapse_snapshot_thumbnail_container',true);
-                self.updateLatestSnapshotThumbnail(self.current_camera_guid());
-                self.updateLatestSnapshotImage(self.current_camera_guid());
-            }
-
-            // Debug Profile Settings
-            self.debug_sorted = ko.computed(function() { return self.nameSort(self.profiles().debug_profiles) });
-            self.openCurrentDebugProfile = function () {
-                //console.log("Opening current debug profile from tab.")
-                Octolapse.DebugProfiles.showAddEditDialog(self.current_debug_profile_guid(), false);
+                self.updateLatestSnapshotThumbnail(true, true);
+                self.updateLatestSnapshotImage(true);
             };
-            self.defaultDebugProfileChanged = function (obj, event) {
+
+            // Logging Profile Settings
+            self.logging_profiles_sorted = ko.computed(function() { return self.nameSort(self.profiles().logging_profiles) });
+            self.openCurrentLoggingProfile = function () {
+                //console.log("Opening current logging profile from tab.")
+                Octolapse.LoggingProfiles.showAddEditDialog(self.current_logging_profile_guid(), false);
+            };
+            self.defaultLoggingProfileChanged = function (obj, event) {
                 if (Octolapse.Globals.is_admin()) {
                     if (event.originalEvent) {
                         // Get the current guid
-                        var guid = $("#octolapse_tab_debug_profile").val();
-                        //console.log("Default Debug Profile is changing to " + guid);
-                        Octolapse.DebugProfiles.setCurrentProfile(guid);
+                        var guid = $("#octolapse_tab_logging_profile").val();
+                        //console.log("Default Logging Profile is changing to " + guid);
+                        Octolapse.LoggingProfiles.setCurrentProfile(guid);
                         return true;
                     }
                 }
             };
 
+            self.setDescriptionAsTitle = function(option, item) {
+                if (!item)
+                    return;
+                ko.applyBindingsToNode(option, {attr: {title: item.description}}, item);
+            };
+
+            self.getPrinterProfileTitle = ko.computed(function () {
+                var currentProfile = self.getCurrentProfileByGuid(self.profiles().printers(),Octolapse.Status.current_printer_profile_guid());
+                if (currentProfile == null)
+                    return "";
+                return currentProfile.description;
+            });
+            self.getStabilizationProfileTitle = ko.computed(function () {
+                var currentProfile = self.getCurrentProfileByGuid(self.profiles().stabilizations(),Octolapse.Status.current_stabilization_profile_guid());
+                if (currentProfile == null)
+                    return "";
+                return currentProfile.description;
+            });
+            self.getTriggerProfileTitle = ko.computed(function () {
+                var currentProfile = self.getCurrentProfileByGuid(self.profiles().triggers(),Octolapse.Status.current_trigger_profile_guid());
+                if (currentProfile == null)
+                    return "";
+                return currentProfile.description;
+            });
+            self.getRenderingProfileTitle = ko.computed(function () {
+                var currentProfile = self.getCurrentProfileByGuid(self.profiles().renderings(),Octolapse.Status.current_rendering_profile_guid());
+                if (currentProfile == null)
+                    return "";
+                return currentProfile.description;
+            });
+            self.getLoggingProfileTitle = ko.computed(function () {
+                var currentProfile = self.getCurrentProfileByGuid(self.profiles().logging_profiles(),Octolapse.Status.current_logging_profile_guid());
+                if (currentProfile == null)
+                    return "";
+                return currentProfile.description;
+            });
+
         };
         /*
             Status Tab viewmodels
         */
-        Octolapse.positionStateViewModel = function () {
+        Octolapse.printerStateViewModel = function () {
             var self = this;
-            self.GCode = ko.observable("");
-            self.XHomed = ko.observable(false);
-            self.YHomed = ko.observable(false);
-            self.ZHomed = ko.observable(false);
-            self.IsLayerChange = ko.observable(false);
-            self.IsHeightChange = ko.observable(false);
-            self.IsInPosition = ko.observable(false);
-            self.InPathPosition = ko.observable(false);
-            self.IsZHop = ko.observable(false);
-            self.IsRelative = ko.observable(null);
-            self.IsExtruderRelative = ko.observable(null);
-            self.Layer = ko.observable(0);
-            self.Height = ko.observable(0).extend({numeric: 2});
-            self.LastExtrusionHeight = ko.observable(0).extend({numeric: 2});
-            self.HasPositionError = ko.observable(false);
-            self.PositionError = ko.observable(false);
-            self.IsMetric = ko.observable(null);
-            self.IsInitialized = ko.observable(false);
+            self.gcode = ko.observable("");
+            self.x_homed = ko.observable(false);
+            self.y_homed = ko.observable(false);
+            self.z_homed = ko.observable(false);
+            self.has_definite_position = ko.observable(false);
+            self.is_layer_change = ko.observable(false);
+            self.is_height_change = ko.observable(false);
+            self.is_in_position = ko.observable(false);
+            self.in_path_position = ko.observable(false);
+            self.is_zhop = ko.observable(false);
+            self.is_relative = ko.observable(null);
+            self.is_extruder_relative = ko.observable(null);
+            self.layer = ko.observable(0);
+            self.height = ko.observable(0).extend({numeric: 2});
+            self.last_extruder_height = ko.observable(0).extend({numeric: 2});
+            self.is_metric = ko.observable(null);
+            self.is_initialized = ko.observable(false);
+            self.is_printer_primed = ko.observable(false);
 
             self.update = function (state) {
-                this.GCode(state.GCode);
-                this.XHomed(state.XHomed);
-                this.YHomed(state.YHomed);
-                this.ZHomed(state.ZHomed);
-                this.IsLayerChange(state.IsLayerChange);
-                this.IsHeightChange(state.IsHeightChange);
-                this.IsInPosition(state.IsInPosition);
-                this.InPathPosition(state.InPathPosition);
-                this.IsZHop(state.IsZHop);
-                this.IsRelative(state.IsRelative);
-                this.IsExtruderRelative(state.IsExtruderRelative);
-                this.Layer(state.Layer);
-                this.Height(state.Height);
-                this.LastExtrusionHeight(state.LastExtrusionHeight);
-                this.HasPositionError(state.HasPositionError);
-                this.PositionError(state.PositionError);
-                this.IsMetric(state.IsMetric);
-                this.IsInitialized(true);
+                self.gcode(state.gcode);
+                self.x_homed(state.x_homed);
+                self.y_homed(state.y_homed);
+                self.z_homed(state.z_homed);
+                self.has_definite_position(state.has_definite_position);
+                self.is_layer_change(state.is_layer_change);
+                self.is_height_change(state.is_height_change);
+                self.is_in_position(state.is_in_position);
+                self.in_path_position(state.in_path_position);
+                self.is_zhop(state.is_zhop);
+                self.is_relative(state.is_relative);
+                self.is_extruder_relative(state.is_extruder_relative);
+                self.layer(state.layer);
+                self.height(state.height);
+                self.last_extruder_height(state.last_extruder_height);
+                self.is_metric(state.is_metric);
+                self.is_printer_primed(state.is_printer_primed);
+                self.is_initialized(true);
             };
 
             self.getCheckedIconClass = function (value, trueClass, falseClass, nullClass) {
@@ -755,7 +1072,6 @@ $(function () {
                 });
             };
 
-
             self.getColor = function (value, trueColor, falseColor, nullColor) {
                 return ko.computed({
                     read: function () {
@@ -769,229 +1085,223 @@ $(function () {
                 });
             };
 
-            self.hasPositionStateErrors = ko.pureComputed(function(){
-                if (Octolapse.Status.is_timelapse_active() && self.IsInitialized())
+            self.hasPrinterStateErrors = ko.pureComputed(function(){
+                if (Octolapse.Status.is_timelapse_active() && self.is_initialized())
 
-                    if (!(self.XHomed() && self.YHomed() && self.ZHomed())
-                        || self.IsRelative() == null
-                        || self.IsExtruderRelative() == null
-                        || !self.IsMetric()
-                        || self.HasPositionError())
+                    if (!(self.x_homed() && self.y_homed() && self.z_homed())
+                        || self.is_relative() == null
+                        || self.is_extruder_relative() == null
+                        || !self.is_metric()
+                    )
                         return true;
                 return false;
             },self);
 
             self.getYHomedStateText = ko.pureComputed(function () {
-                if (self.YHomed())
+                if (self.y_homed())
                     return "Homed";
                 else
                     return "Not homed";
             }, self);
             self.getZHomedStateText = ko.pureComputed(function () {
-                if (self.ZHomed())
+                if (self.z_homed())
                     return "Homed";
                 else
                     return "Not homed";
             }, self);
             self.getIsZHopStateText = ko.pureComputed(function () {
-                if (self.IsZHop())
+                if (self.is_zhop())
                     return "Zhop detected";
                 else
                     return "Not a zhop";
             }, self);
 
+            self.getHasDefinitePositionText = ko.pureComputed(function(){
+               if (self.has_definite_position())
+                   return "Current position is definite";
+               else
+                   return "Current position is not fully known.";
+            });
+
             self.getIsInPositionStateText = ko.pureComputed(function () {
-                if (self.IsInPosition())
+                if (self.is_in_position())
                     return "In position";
-                else if (self.InPathPosition())
-                    return "In path position"
+                else if (self.in_path_position())
+                    return "In path position";
                 else
                     return "Not in position";
             }, self);
 
             self.getIsMetricStateText = ko.pureComputed(function () {
-                if (self.IsMetric())
+                if (self.is_metric())
                     return "Metric";
-                else if (self.IsMetric() === null)
+                else if (self.is_metric() === null)
                     return "Unknown";
                 else
                     return "Not Metric";
             }, self);
             self.getIsExtruderRelativeStateText = ko.pureComputed(function () {
-                if (self.IsExtruderRelative() == null)
+                if (self.is_extruder_relative() == null)
                     return "Not Set";
-                else if (self.IsExtruderRelative())
+                else if (self.is_extruder_relative())
                     return "Relative";
                 else
                     return "Absolute";
             }, self);
 
             self.getExtruderModeText = ko.pureComputed(function () {
-                if (self.IsExtruderRelative() == null)
+                if (self.is_extruder_relative() == null)
                     return "Mode";
-                else if (self.IsExtruderRelative())
+                else if (self.is_extruder_relative())
                     return "Relative";
                 else
                     return "Absolute";
             }, self);
             self.getXYZModeText = ko.pureComputed(function () {
-                if (self.IsRelative() == null)
+                if (self.is_relative() == null)
                     return "Mode";
-                else if (self.IsRelative())
+                else if (self.is_relative())
                     return "Relative";
                 else
                     return "Absolute";
             }, self);
             self.getIsRelativeStateText = ko.pureComputed(function () {
-                if (self.IsRelative() == null)
+                if (self.is_relative() == null)
                     return "Not Set";
-                else if (self.IsRelative())
+                else if (self.is_relative())
                     return "Relative";
                 else
                     return "Absolute";
             }, self);
-
-            self.getHasPositionErrorStateText = ko.pureComputed(function () {
-                if (self.HasPositionError())
-                    return "A position error was detected";
-                else
-                    return "No current position errors";
-            }, self);
             self.getIsLayerChangeStateText = ko.pureComputed(function () {
-                if (self.IsLayerChange())
+                if (self.is_layer_change())
                     return "Layer change detected";
                 else
                     return "Not changing layers";
             }, self);
+
+            self.getIsPrinterPrimedStateTitle = ko.pureComputed(function(){
+                if(self.is_printer_primed())
+                    return "Primed";
+                else
+                    return "Not Primed";
+            }, self);
         };
+
         Octolapse.positionViewModel = function () {
             var self = this;
-            self.F = ko.observable(0).extend({numeric: 2});
-            self.X = ko.observable(0).extend({numeric: 2});
-            self.XOffset = ko.observable(0).extend({numeric: 2});
-            self.Y = ko.observable(0).extend({numeric: 2});
-            self.YOffset = ko.observable(0).extend({numeric: 2});
-            self.Z = ko.observable(0).extend({numeric: 2});
-            self.ZOffset = ko.observable(0).extend({numeric: 2});
-            self.E = ko.observable(0).extend({numeric: 2});
-            self.EOffset = ko.observable(0).extend({numeric: 2});
-            self.Features = ko.observableArray([]);
+            self.f = ko.observable(0).extend({numeric: 2});
+            self.x = ko.observable(0).extend({numeric: 2});
+            self.x_offset = ko.observable(0).extend({numeric: 2});
+            self.y = ko.observable(0).extend({numeric: 2});
+            self.y_offset = ko.observable(0).extend({numeric: 2});
+            self.z = ko.observable(0).extend({numeric: 2});
+            self.z_offset = ko.observable(0).extend({numeric: 2});
+            self.e = ko.observable(0).extend({numeric: 2});
+            self.e_offset = ko.observable(0).extend({numeric: 2});
             self.update = function (state) {
-                this.F(state.F);
-                this.X(state.X);
-                this.XOffset(state.XOffset);
-                this.Y(state.Y);
-                this.YOffset(state.YOffset);
-                this.Z(state.Z);
-                this.ZOffset(state.ZOffset);
-                this.E(state.E);
-                this.EOffset(state.EOffset);
-                this.Features(state.Features);
-                //console.log(this.Features());
-                //self.plotPosition(state.X, state.Y, state.Z);
+                this.f(state.f);
+                this.x(state.x);
+                this.x_offset(state.x_offset);
+                this.y(state.y);
+                this.y_offset(state.y_offset);
+                this.z(state.z);
+                this.z_offset(state.z_offset);
+                this.e(state.e);
+                this.e_offset(state.e_offset);
             };
-            /*
-            self.plotPosition = function(x, y,z)
-            {
-                //console.log("Plotting Position")
-                var canvas = document.getElementById("octolapse_position_canvas");
-                canvas.width = 250;
-                canvas.height = 200;
-                var ctx = canvas.getContext("2d");
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.fillRect(x + 2, x - 2,4, 4);
 
-            }*/
         };
+
         Octolapse.extruderStateViewModel = function () {
             var self = this;
             // State variables
-            self.ExtrusionLengthTotal = ko.observable(0).extend({numeric: 2});
-            self.ExtrusionLength = ko.observable(0).extend({numeric: 2});
-            self.RetractionLength = ko.observable(0).extend({numeric: 2});
-            self.DetractionLength = ko.observable(0).extend({numeric: 2});
-            self.IsExtrudingStart = ko.observable(false);
-            self.IsExtruding = ko.observable(false);
-            self.IsPrimed = ko.observable(false);
-            self.IsRetractingStart = ko.observable(false);
-            self.IsRetracting = ko.observable(false);
-            self.IsRetracted = ko.observable(false);
-            self.IsPartiallyRetracted = ko.observable(false);
-            self.IsDetractingStart = ko.observable(false);
-            self.IsDetracting = ko.observable(false);
-            self.IsDetracted = ko.observable(false);
-            self.HasChanged = ko.observable(false);
+            self.extrusion_length_total = ko.observable(0).extend({numeric: 2});
+            self.extrusion_length = ko.observable(0).extend({numeric: 2});
+            self.retraction_length = ko.observable(0).extend({numeric: 2});
+            self.deretraction_length = ko.observable(0).extend({numeric: 2});
+            self.is_extruding_start = ko.observable(false);
+            self.is_extruding = ko.observable(false);
+            self.is_primed = ko.observable(false);
+            self.is_retracting_start = ko.observable(false);
+            self.is_retracting = ko.observable(false);
+            self.is_retracted = ko.observable(false);
+            self.is_partially_retracted = ko.observable(false);
+            self.is_deretracting_start = ko.observable(false);
+            self.is_deretracting = ko.observable(false);
+            self.is_deretracted = ko.observable(false);
+            self.has_changed = ko.observable(false);
 
             self.update = function (state) {
-                this.ExtrusionLengthTotal(state.ExtrusionLengthTotal);
-                this.ExtrusionLength(state.ExtrusionLength);
-                this.RetractionLength(state.RetractionLength);
-                this.DetractionLength(state.DetractionLength);
-                this.IsExtrudingStart(state.IsExtrudingStart);
-                this.IsExtruding(state.IsExtruding);
-                this.IsPrimed(state.IsPrimed);
-                this.IsRetractingStart(state.IsRetractingStart);
-                this.IsRetracting(state.IsRetracting);
-                this.IsRetracted(state.IsRetracted);
-                this.IsPartiallyRetracted(state.IsPartiallyRetracted);
-                this.IsDetractingStart(state.IsDetractingStart);
-                this.IsDetracting(state.IsDetracting);
-                this.IsDetracted(state.IsDetracted);
-                this.HasChanged(state.HasChanged);
+                this.extrusion_length_total(state.extrusion_length_total);
+                this.extrusion_length(state.extrusion_length);
+                this.retraction_length(state.retraction_length);
+                this.deretraction_length(state.deretraction_length);
+                this.is_extruding_start(state.is_extruding_start);
+                this.is_extruding(state.is_extruding);
+                this.is_primed(state.is_primed);
+                this.is_retracting_start(state.is_retracting_start);
+                this.is_retracting(state.is_retracting);
+                this.is_retracted(state.is_retracted);
+                this.is_partially_retracted(state.is_partially_retracted);
+                this.is_deretracting_start(state.is_deretracting_start);
+                this.is_deretracting(state.is_deretracting);
+                this.is_deretracted(state.is_deretracted);
+                this.has_changed(state.has_changed);
             };
 
             self.getRetractionStateIconClass = ko.pureComputed(function () {
-                if (self.IsRetracting()) {
-                    if (self.IsPartiallyRetracted() && !self.IsRetracted())
+                if (self.is_retracting()) {
+                    if (self.is_partially_retracted() && !self.is_retracted())
                         return "fa-angle-up";
-                    else if (self.IsRetracted() && !self.IsPartiallyRetracted())
+                    else if (self.is_retracted() && !self.is_partially_retracted())
                         return "fa-angle-double-up";
                 }
-                return "fa-times-circle";
+                return "fa-times";
             }, self);
             self.getRetractionStateText = ko.pureComputed(function () {
 
-                if (self.IsRetracting()) {
+                if (self.is_retracting()) {
                     var text = "";
 
 
-                    if (self.IsPartiallyRetracted() && !self.IsRetracted()) {
-                        if (self.IsRetractingStart())
+                    if (self.is_partially_retracted() && !self.is_retracted()) {
+                        if (self.is_retracting_start())
                             text += "Start: ";
-                        text += self.RetractionLength() + "mm";
+                        text += self.retraction_length() + "mm";
                         return text;
                     }
-                    else if (self.IsRetracted() && !self.IsPartiallyRetracted()) {
-                        if (self.IsRetractingStart())
-                            return "Retracted Start: " + self.RetractionLength() + "mm";
+                    else if (self.is_retracted() && !self.is_partially_retracted()) {
+                        if (self.is_retracting_start())
+                            return "Retracted Start: " + self.retraction_length() + "mm";
                         else
-                            return "Retracted: " + self.RetractionLength() + "mm";
+                            return "Retracted: " + self.retraction_length() + "mm";
                     }
                 }
                 return "None";
             }, self);
-            self.getDetractionIconClass = ko.pureComputed(function () {
+            self.getDeretractionIconClass = ko.pureComputed(function () {
 
-                if (self.IsRetracting() && self.IsDetracting())
-                    return "fa-exclamation-circle";
-                if (self.IsDetracting() && self.IsDetractingStart)
+                if (self.is_retracting() && self.is_deretracting())
+                    return "fa-exclamation";
+                if (self.is_deretracting() && self.is_deretracting_start)
                     return "fa-level-down";
-                if (self.IsDetracting())
-                    return "fa-long-arrow-down";
-                return "fa-times-circle";
+                if (self.is_deretracting())
+                    return "fa-arrow-down";
+                return "fa-times";
             }, self);
-            self.getDetractionStateText = ko.pureComputed(function () {
+            self.getDeretractionStateText = ko.pureComputed(function () {
 
                 var text = "";
-                if (self.IsRetracting() && self.IsDetracting())
+                if (self.is_retracting() && self.is_deretracting())
                     text = "Error";
-                else if (self.IsDetracted()) {
-                    text = "Detracted: " + self.DetractionLength() + "mm";
+                else if (self.is_deretracted()) {
+                    text = "Deretracted: " + self.deretraction_length() + "mm";
                 }
-                else if (self.IsDetracting()) {
-                    if (self.IsDetractingStart())
+                else if (self.is_deretracting()) {
+                    if (self.is_deretracting_start())
                         text += "Start: ";
-                    text += self.DetractionLength() + "mm";
+                    text += self.deretraction_length() + "mm";
                 }
                 else
                     text = "None";
@@ -1001,39 +1311,40 @@ $(function () {
 
             self.getExtrudingStateIconClass = ko.pureComputed(function () {
 
-                if (self.IsExtrudingStart() && !self.IsExtruding())
+                if (self.is_extruding_start() && !self.is_extruding())
                     return "exclamation-circle";
 
-                if (self.IsPrimed())
-                    return "fa-arrows-h";
-                if (self.IsExtrudingStart())
+                if (self.is_primed())
+                    return "fa-minus";
+                if (self.is_extruding_start())
                     return "fa-play-circle-o";
-                if (self.IsExtruding())
+                if (self.is_extruding())
                     return "fa-play";
-                return "fa-times-circle";
+                return "fa-times";
             }, self);
             self.getExtrudingStateText = ko.pureComputed(function () {
-                if (self.IsExtrudingStart() && !self.IsExtruding())
+                if (self.is_extruding_start() && !self.is_extruding())
                     return "Error";
-                if (self.IsPrimed())
+                if (self.is_primed())
                     return "Primed";
-                if (self.IsExtrudingStart())
-                    return "Start: " + self.ExtrusionLength() + "mm";
-                if (self.IsExtruding())
-                    return self.ExtrusionLength() + "mm";
+                if (self.is_extruding_start())
+                    return "Start: " + self.extrusion_length() + "mm";
+                if (self.is_extruding())
+                    return self.extrusion_length() + "mm";
                 return "None";
             }, self);
         };
-        Octolapse.triggersStateViewModel = function () {
+
+        Octolapse.TriggersStateViewModel = function () {
             var self = this;
 
             // State variables
-            self.Name = ko.observable();
-            self.Triggers = ko.observableArray();
+            self.name = ko.observable();
+            self.triggers = ko.observableArray();
             self.HasBeenCreated = false;
             self.create = function (trigger) {
                 var newTrigger = null;
-                switch (trigger.Type) {
+                switch (trigger.type) {
                     case "gcode":
                         newTrigger = new Octolapse.gcodeTriggerStateViewModel(trigger);
                         break;
@@ -1047,23 +1358,23 @@ $(function () {
                         newTrigger = new Octolapse.genericTriggerStateViewModel(trigger);
                         break;
                 }
-                self.Triggers.push(newTrigger);
+                self.triggers.push(newTrigger);
             };
 
             self.removeAll = function () {
-                self.Triggers.removeAll();
+                self.triggers.removeAll();
             };
 
             self.update = function (states) {
                 //console.log("Updating trigger states")
-                self.Name(states.Name);
-                var triggers = states.Triggers;
+                self.name(states.name);
+                var triggers = states.triggers;
                 for (var sI = 0; sI < triggers.length; sI++) {
                     var state = triggers[sI];
                     var foundState = false;
-                    for (var i = 0; i < self.Triggers().length; i++) {
-                        var currentTrigger = self.Triggers()[i];
-                        if (state.Type === currentTrigger.Type()) {
+                    for (var i = 0; i < self.triggers().length; i++) {
+                        var currentTrigger = self.triggers()[i];
+                        if (state.type === currentTrigger.type()) {
                             currentTrigger.update(state);
                             foundState = true;
                             break;
@@ -1079,38 +1390,34 @@ $(function () {
         Octolapse.genericTriggerStateViewModel = function (state) {
             //console.log("creating generic trigger state view model");
             var self = this;
-            self.Type = ko.observable(state.Type);
-            self.Name = ko.observable(state.Name);
-            self.IsTriggered = ko.observable(state.IsTriggered);
-            self.IsWaiting = ko.observable(state.IsWaiting);
-            self.IsWaitingOnZHop = ko.observable(state.IsWaitingOnZHop);
-            self.IsWaitingOnExtruder = ko.observable(state.IsWaitingOnExtruder);
-            self.RequireZHop = ko.observable(state.RequireZHop);
-            self.TriggeredCount = ko.observable(state.TriggeredCount).extend({compactint: 1});
-            self.IsHomed = ko.observable(state.IsHomed);
-            self.IsInPosition = ko.observable(state.IsInPosition);
-            self.InPathPosition = ko.observable(state.IsInPathPosition);
-            self.IsFeatureAllowed = ko.observable(state.IsFeatureAllowed);
-            self.IsWaitingOnFeature = ko.observable(state.IsWaitingOnFeature);
+            self.type = ko.observable(state.type);
+            self.name = ko.observable(state.name);
+            self.is_triggered = ko.observable(state.is_triggered);
+            self.is_waiting = ko.observable(state.is_waiting);
+            self.is_waiting_on_zhop = ko.observable(state.is_waiting_on_zhop);
+            self.is_waiting_on_extruder = ko.observable(state.is_waiting_on_extruder);
+            self.require_zhop = ko.observable(state.require_zhop);
+            self.trigger_count = ko.observable(state.trigger_count).extend({compactint: 1});
+            self.has_definite_position = ko.observable(state.has_definite_position);
+            self.is_in_position = ko.observable(state.is_in_position);
+            self.in_path_position = ko.observable(state.Isin_path_position);
             self.update = function (state) {
-                self.Type(state.Type);
-                self.Name(state.Name);
-                self.IsTriggered(state.IsTriggered);
-                self.IsWaiting(state.IsWaiting);
-                self.IsWaitingOnZHop(state.IsWaitingOnZHop);
-                self.IsWaitingOnExtruder(state.IsWaitingOnExtruder);
-                self.RequireZHop(state.RequireZHop);
-                self.TriggeredCount(state.TriggeredCount);
-                self.IsHomed(state.IsHomed);
-                self.IsInPosition(state.IsInPosition);
-                self.InPathPosition(state.InPathPosition);
-                self.IsFeatureAllowed(state.IsFeatureAllowed);
-                self.IsWaitingOnFeature(state.IsWaitingOnFeature);
+                self.type(state.type);
+                self.name(state.name);
+                self.is_triggered(state.is_triggered);
+                self.is_waiting(state.is_waiting);
+                self.is_waiting_on_zhop(state.is_waiting_on_zhop);
+                self.is_waiting_on_extruder(state.is_waiting_on_extruder);
+                self.require_zhop(state.require_zhop);
+                self.trigger_count(state.trigger_count);
+                self.has_definite_position(state.has_definite_position);
+                self.is_in_position(state.is_in_position);
+                self.in_path_position(state.in_path_position);
             };
             self.triggerBackgroundIconClass = ko.pureComputed(function () {
-                if (!self.IsHomed())
-                    return "bg-not-homed";
-                else if (!self.IsTriggered() && Octolapse.PrinterStatus.isPaused())
+                if (!self.has_definite_position())
+                    return "bg-unknown-position";
+                else if (!self.is_triggered() && Octolapse.PrinterStatus.isPaused())
                     return " bg-paused";
                 else
                     return "";
@@ -1118,24 +1425,22 @@ $(function () {
             /* style related computed functions */
             self.triggerStateText = ko.pureComputed(function () {
                 //console.log("Calculating trigger state text.");
-                if (!self.IsHomed())
-                    return "Idle until all axes are homed";
-                else if (self.IsTriggered())
+                if (!self.has_definite_position())
+                    return "Idle until a definite position is found";
+                else if (self.is_triggered())
                     return "Triggering a snapshot";
                 else if (Octolapse.PrinterStatus.isPaused())
                     return "The trigger is paused";
-                else if (self.IsWaiting()) {
+                else if (self.is_waiting()) {
                     // Create a list of things we are waiting on
                     var waitText = "Waiting";
                     var waitList = [];
-                    if (self.IsWaitingOnZHop())
+                    if (self.is_waiting_on_zhop())
                         waitList.push("zhop");
-                    if (self.IsWaitingOnExtruder())
+                    if (self.is_waiting_on_extruder())
                         waitList.push("extruder");
-                    if (!self.IsInPosition() && !self.InPathPosition())
+                    if (!self.is_in_position() && !self.in_path_position())
                         waitList.push("position");
-                    if (self.IsWaitingOnFeature())
-                        waitList.push("feature");
                     if (waitList.length > 1) {
                         waitText += " for " + waitList.join(" and ");
                         waitText += " to trigger";
@@ -1150,13 +1455,13 @@ $(function () {
 
             }, self);
             self.triggerIconClass = ko.pureComputed(function () {
-                if (!self.IsHomed())
+                if (!self.has_definite_position())
                     return "not-homed";
-                if (self.IsTriggered())
+                if (self.is_triggered())
                     return "trigger";
                 if (Octolapse.PrinterStatus.isPaused())
                     return "paused";
-                if (self.IsWaiting())
+                if (self.is_waiting())
                     return "wait";
                 else
                     return "fa-inverse";
@@ -1169,329 +1474,290 @@ $(function () {
                 return "";
             }, self);
         };
+
         Octolapse.gcodeTriggerStateViewModel = function (state) {
             //console.log("creating gcode trigger state view model");
             var self = this;
-            self.Type = ko.observable(state.Type);
-            self.Name = ko.observable(state.Name);
-            self.IsTriggered = ko.observable(state.IsTriggered);
-            self.IsWaiting = ko.observable(state.IsWaiting);
-            self.IsWaitingOnZHop = ko.observable(state.IsWaitingOnZHop);
-            self.IsWaitingOnExtruder = ko.observable(state.IsWaitingOnExtruder);
-            self.SnapshotCommand = ko.observable(state.SnapshotCommand);
-            self.RequireZHop = ko.observable(state.RequireZHop);
-            self.TriggeredCount = ko.observable(state.TriggeredCount).extend({compactint: 1});
-            self.IsHomed = ko.observable(state.IsHomed);
-            self.IsInPosition = ko.observable(state.IsInPosition);
-            self.InPathPosition = ko.observable(state.IsInPathPosition);
-            self.IsWaitingOnFeature = ko.observable(state.IsWaitingOnFeature);
+            self.type = ko.observable(state.type);
+            self.name = ko.observable(state.name);
+            self.is_triggered = ko.observable(state.is_triggered);
+            self.is_waiting = ko.observable(state.is_waiting);
+            self.is_waiting_on_zhop = ko.observable(state.is_waiting_on_zhop);
+            self.is_waiting_on_extruder = ko.observable(state.is_waiting_on_extruder);
+            self.snapshot_command = ko.observable(state.snapshot_command);
+            self.require_zhop = ko.observable(state.require_zhop);
+            self.trigger_count = ko.observable(state.trigger_count).extend({compactint: 1});
+            self.has_definite_position = ko.observable(state.has_definite_position);
+            self.is_in_position = ko.observable(state.is_in_position);
+            self.in_path_position = ko.observable(state.Isin_path_position);
             self.update = function (state) {
-                self.Type(state.Type);
-                self.Name(state.Name);
-                self.IsTriggered(state.IsTriggered);
-                self.IsWaiting(state.IsWaiting);
-                self.IsWaitingOnZHop(state.IsWaitingOnZHop);
-                self.IsWaitingOnExtruder(state.IsWaitingOnExtruder);
-                self.SnapshotCommand(state.SnapshotCommand);
-                self.RequireZHop(state.RequireZHop);
-                self.TriggeredCount(state.TriggeredCount);
-                self.IsHomed(state.IsHomed);
-                self.IsInPosition(state.IsInPosition);
-                self.InPathPosition(state.InPathPosition);
-                self.IsWaitingOnFeature(state.IsWaitingOnFeature);
+                self.type(state.type);
+                self.name(state.name);
+                self.is_triggered(state.is_triggered);
+                self.is_waiting(state.is_waiting);
+                self.is_waiting_on_zhop(state.is_waiting_on_zhop);
+                self.is_waiting_on_extruder(state.is_waiting_on_extruder);
+                self.snapshot_command(state.snapshot_command);
+                self.require_zhop(state.require_zhop);
+                self.trigger_count(state.trigger_count);
+                self.has_definite_position(state.has_definite_position);
+                self.is_in_position(state.is_in_position);
+                self.in_path_position(state.in_path_position);
             };
 
-            self.triggerBackgroundIconClass = ko.pureComputed(function () {
-                if (!self.IsHomed())
-                    return "bg-not-homed";
-                else if (!self.IsTriggered() && Octolapse.PrinterStatus.isPaused())
-                    return " bg-paused";
-                else
-                    return "";
-            }, self);
-
-            /* style related computed functions */
-            self.triggerStateText = ko.pureComputed(function () {
-                if (!self.IsHomed())
-                    return "Idle until all axes are homed";
-                else if (self.IsTriggered())
-                    return "Triggering a snapshot";
-                else if (Octolapse.PrinterStatus.isPaused())
-                    return "Paused";
-                else if (self.IsWaiting()) {
-                    // Create a list of things we are waiting on
-                    var waitText = "Waiting";
-                    var waitList = [];
-                    if (self.IsWaitingOnZHop())
-                        waitList.push("zhop");
-                    if (self.IsWaitingOnExtruder())
-                        waitList.push("extruder");
-                    if (!self.IsInPosition() && !self.InPathPosition())
-                        waitList.push("position");
-                    if (self.IsWaitingOnFeature())
-                        waitList.push("feature");
-                    if (waitList.length > 1) {
-                        waitText += " for " + waitList.join(" and ");
-                        waitText += " to trigger";
-                    }
-                    else if (waitList.length === 1)
-                        waitText += " for " + waitList[0] + " to trigger";
-                    return waitText;
+            self.getSnapshotCommands =  ko.pureComputed(function () {
+                commands = ["@OCTOLAPSE TAKE-SNAPSHOT", "SNAP"];
+                if (self.snapshot_command().length > 0)
+                {
+                    commands.push(self.snapshot_command())
                 }
-
-                else
-                    return "Looking for snapshot gcode";
-
-            }, self);
-            self.triggerIconClass = ko.pureComputed(function () {
-                if (!self.IsHomed())
-                    return "not-homed";
-                if (self.IsTriggered())
-                    return "trigger";
-                if (Octolapse.PrinterStatus.isPaused())
-                    return "paused";
-                if (self.IsWaiting())
-                    return "wait";
-                else
-                    return "fa-inverse";
-            }, self);
-
-            self.getInfoText = ko.pureComputed(function () {
-                return "Triggering on gcode command: " + self.SnapshotCommand();
-
-
-            }, self);
-            self.getInfoIconText = ko.pureComputed(function () {
-                return self.SnapshotCommand()
-            }, self);
-
-        };
-        Octolapse.layerTriggerStateViewModel = function (state) {
-            //console.log("creating layer trigger state view model");
-            var self = this;
-            self.Type = ko.observable(state.Type);
-            self.Name = ko.observable(state.Name);
-            self.IsTriggered = ko.observable(state.IsTriggered);
-            self.IsWaiting = ko.observable(state.IsWaiting);
-            self.IsWaitingOnZHop = ko.observable(state.IsWaitingOnZHop);
-            self.IsWaitingOnExtruder = ko.observable(state.IsWaitingOnExtruder);
-            self.CurrentIncrement = ko.observable(state.CurrentIncrement);
-            self.IsLayerChange = ko.observable(state.IsLayerChange);
-            self.IsLayerChangeWait = ko.observable(state.IsLayerChangeWait);
-            self.IsHeightChange = ko.observable(state.IsHeightChange);
-            self.IsHeightChangeWait = ko.observable(state.IsHeightChangeWait);
-            self.HeightIncrement = ko.observable(state.HeightIncrement).extend({numeric: 2});
-            self.RequireZHop = ko.observable(state.RequireZHop);
-            self.TriggeredCount = ko.observable(state.TriggeredCount).extend({compactint: 1});
-            self.IsHomed = ko.observable(state.IsHomed);
-            self.Layer = ko.observable(state.Layer);
-            self.IsInPosition = ko.observable(state.IsInPosition);
-            self.InPathPosition = ko.observable(state.IsInPathPosition);
-            self.IsWaitingOnFeature = ko.observable(state.IsWaitingOnFeature);
-            self.update = function (state) {
-                self.Type(state.Type);
-                self.Name(state.Name);
-                self.IsTriggered(state.IsTriggered);
-                self.IsWaiting(state.IsWaiting);
-                self.IsWaitingOnZHop(state.IsWaitingOnZHop);
-                self.IsWaitingOnExtruder(state.IsWaitingOnExtruder);
-                self.CurrentIncrement(state.CurrentIncrement);
-                self.IsLayerChange(state.IsLayerChange);
-                self.IsLayerChangeWait(state.IsLayerChangeWait);
-                self.IsHeightChange(state.IsHeightChange);
-                self.IsHeightChangeWait(state.IsHeightChangeWait);
-                self.HeightIncrement(state.HeightIncrement);
-                self.RequireZHop(state.RequireZHop);
-                self.TriggeredCount(state.TriggeredCount);
-                self.IsHomed(state.IsHomed);
-                self.Layer(state.Layer);
-                self.IsInPosition(state.IsInPosition);
-                self.InPathPosition(state.InPathPosition);
-                self.IsWaitingOnFeature(state.IsWaitingOnFeature);
-            };
-            self.triggerBackgroundIconClass = ko.pureComputed(function () {
-                if (!self.IsHomed())
-                    return "bg-not-homed";
-                else if (!self.IsTriggered() && Octolapse.PrinterStatus.isPaused())
-                    return " bg-paused";
+                return commands;
             }, self);
 
             /* style related computed functions */
             self.triggerStateText = ko.pureComputed(function () {
-                if (!self.IsHomed())
-                    return "Idle until all axes are homed";
-                else if (self.IsTriggered())
-                    return "Triggering a snapshot";
+                if (!self.has_definite_position())
+                    return "Idle until the printer's position is known.";
+                else if (self.is_triggered())
+                    return "Triggering a snapshot.";
                 else if (Octolapse.PrinterStatus.isPaused())
-                    return "Paused";
-                else if (self.IsWaiting()) {
-                    // Create a list of things we are waiting on
-                    //console.log("Generating wait state text for LayerTrigger");
-                    var waitText = "Waiting";
+                    return "The trigger is paused.";
+                else if (self.is_waiting()) {
+                    var waitText = "Waiting for";
                     var waitList = [];
-                    if (self.IsWaitingOnZHop())
+                    if (self.is_waiting_on_zhop())
                         waitList.push("zhop");
-                    if (self.IsWaitingOnExtruder())
+                    if (self.is_waiting_on_extruder())
                         waitList.push("extruder");
-                    if (!self.IsInPosition() && !self.InPathPosition())
+                    if (!self.is_in_position() && !self.in_path_position())
                     {
                         waitList.push("position");
                         //console.log("Waiting on position.");
                     }
-                    if (self.IsWaitingOnFeature())
-                        waitList.push("feature");
-                    if (waitList.length > 1) {
-                        waitText += " for " + waitList.join(" and ");
-                        waitText += " to trigger";
+                    if (waitList.length > 0) {
+                        if (waitList.length === 1) {
+                            waitText += waitList[0];
+                        }
+                        else if (waitList.length > 1) {
+                            var commaSeparated = waitList.slice(0, waitList.length - 2);
+                            waitText += commaSeparated.join(", ");
+                            if (waitList.length > 2)
+                                waitText += ", ";
+                            waitText += waitList[waitList.length-1];
+                        }
+                        waitText += " to trigger.";
                     }
-
-                    else if (waitList.length === 1)
-                        waitText += " for " + waitList[0] + " to trigger";
                     return waitText;
                 }
-                else if (self.HeightIncrement() > 0) {
-                    var heightToTrigger = self.HeightIncrement() * self.CurrentIncrement();
-                    return "Triggering when height reaches " + heightToTrigger.toFixed(1) + " mm";
+                else{
+                    return "Waiting for a snapshot command.";
                 }
-                else
-                    return "Triggering on next layer change";
-
             }, self);
-
-            self.triggerIconClass = ko.pureComputed(function () {
-                if (!self.IsHomed())
-                    return "not-homed";
-                if (self.IsTriggered())
-                    return "trigger";
-                if (Octolapse.PrinterStatus.isPaused())
-                    return "paused";
-                if (self.IsWaiting())
-                    return " wait";
-                else
-                    return " fa-inverse";
-            }, self);
-
-            self.getInfoText = ko.pureComputed(function () {
-                var val = 0;
-                if (self.HeightIncrement() > 0)
-
-                    val = self.HeightIncrement() + " mm";
-
-                else
-                    val = "layer";
-                return "Triggering every " + Octolapse.ToCompactInt(val);
-
-
-            }, self);
-            self.getInfoIconText = ko.pureComputed(function () {
-                var val = 0;
-                if (self.HeightIncrement() > 0)
-                    val = self.CurrentIncrement();
-                else
-                    val = self.Layer();
-                return Octolapse.ToCompactInt(val);
-            }, self);
-
         };
-        Octolapse.timerTriggerStateViewModel = function (state) {
-            //console.log("creating timer trigger state view model");
-            var self = this;
-            self.Type = ko.observable(state.Type);
-            self.Name = ko.observable(state.Name);
-            self.IsTriggered = ko.observable(state.IsTriggered);
-            self.IsWaiting = ko.observable(state.IsWaiting);
-            self.IsWaitingOnZHop = ko.observable(state.IsWaitingOnZHop);
-            self.IsWaitingOnExtruder = ko.observable(state.IsWaitingOnExtruder);
-            self.SecondsToTrigger = ko.observable(state.SecondsToTrigger);
-            self.IntervalSeconds = ko.observable(state.IntervalSeconds);
-            self.TriggerStartTime = ko.observable(state.TriggerStartTime).extend({time: null});
-            self.PauseTime = ko.observable(state.PauseTime).extend({time: null});
-            self.RequireZHop = ko.observable(state.RequireZHop);
-            self.TriggeredCount = ko.observable(state.TriggeredCount);
-            self.IsHomed = ko.observable(state.IsHomed);
-            self.IsInPosition = ko.observable(state.IsInPosition);
-            self.InPathPosition = ko.observable(state.IsInPathPosition);
-            self.IsWaitingOnFeature = ko.observable(state.IsWaitingOnFeature);
-            self.update = function (state) {
-                self.Type(state.Type);
-                self.Name(state.Name);
-                self.IsTriggered(state.IsTriggered);
-                self.IsWaiting(state.IsWaiting);
-                self.IsWaitingOnZHop(state.IsWaitingOnZHop);
-                self.IsWaitingOnExtruder(state.IsWaitingOnExtruder);
-                self.RequireZHop(state.RequireZHop);
-                self.SecondsToTrigger(state.SecondsToTrigger);
-                self.TriggerStartTime(state.TriggerStartTime);
-                self.PauseTime(state.PauseTime);
-                self.IntervalSeconds(state.IntervalSeconds);
-                self.TriggeredCount(state.TriggeredCount);
-                self.IsHomed(state.IsHomed);
-                self.IsInPosition(state.IsInPosition);
-                self.InPathPosition(state.InPathPosition);
-                self.IsWaitingOnFeature(state.IsWaitingOnFeature);
-            };
 
+        Octolapse.layerTriggerStateViewModel = function (state) {
+            //console.log("creating layer trigger state view model");
+            var self = this;
+            self.type = ko.observable(state.type);
+            self.name = ko.observable(state.name);
+            self.is_triggered = ko.observable(state.is_triggered);
+            self.is_waiting = ko.observable(state.is_waiting);
+            self.is_waiting_on_zhop = ko.observable(state.is_waiting_on_zhop);
+            self.is_waiting_on_extruder = ko.observable(state.is_waiting_on_extruder);
+            self.current_increment = ko.observable(state.current_increment);
+            self.is_layer_change = ko.observable(state.is_layer_change);
+            self.is_layer_change_wait = ko.observable(state.is_layer_change_wait);
+            self.is_height_change = ko.observable(state.is_height_change);
+            self.is_height_change_wait = ko.observable(state.is_height_change_wait);
+            self.height_increment = ko.observable(state.height_increment).extend({numeric: 2});
+            self.has_definite_position = ko.observable(state.has_definite_position);
+            self.is_in_position = ko.observable(state.is_in_position);
+            self.in_path_position = ko.observable(state.in_path_position);
+
+            self.require_zhop = ko.observable(state.require_zhop);
+            self.trigger_count = ko.observable(state.trigger_count).extend({compactint: 1});
+            self.layer = ko.observable(state.layer);
+
+            self.update = function (state) {
+                self.type(state.type);
+                self.name(state.name);
+                // Config Info
+                self.require_zhop(state.require_zhop);
+                self.height_increment(state.height_increment);
+                // Layer and current increment
+                self.layer(state.layer);
+                self.current_increment(state.current_increment);
+                self.trigger_count(state.trigger_count);
+                // Triggering/Waiting Status
+                self.is_triggered(state.is_triggered);
+                self.is_waiting(state.is_waiting);
+                self.is_layer_change(state.is_layer_change);
+                self.is_layer_change_wait(state.is_layer_change_wait);
+                self.is_height_change(state.is_height_change);
+                self.is_height_change_wait(state.is_height_change_wait);
+                self.is_waiting_on_zhop(state.is_waiting_on_zhop);
+                self.is_waiting_on_extruder(state.is_waiting_on_extruder);
+                self.has_definite_position(state.has_definite_position);
+                self.is_in_position(state.is_in_position);
+                self.in_path_position(state.in_path_position);
+                // Layer/Height change Info
+            };
 
             /* style related computed functions */
             self.triggerStateText = ko.pureComputed(function () {
-                if (!self.IsHomed())
-                    return "Idle until all axes are homed";
-                else if (self.IsTriggered())
-                    return "Triggering a snapshot";
+                if (!self.has_definite_position())
+                    return "Idle until the printer's position is known.";
+                else if (self.is_triggered())
+                    return "Triggering a snapshot.";
                 else if (Octolapse.PrinterStatus.isPaused())
-                    return "Paused";
-                else if (self.IsWaiting()) {
-                    // Create a list of things we are waiting on
-                    var waitText = "Waiting";
+                    return "The trigger is paused.";
+                else if (self.is_waiting()) {
+                    var waitText = "Waiting for";
                     var waitList = [];
-                    if (self.IsWaitingOnZHop())
+                    if (self.is_waiting_on_zhop())
                         waitList.push("zhop");
-                    if (self.IsWaitingOnExtruder())
+                    if (self.is_waiting_on_extruder())
                         waitList.push("extruder");
-                    if (!self.IsInPosition() && !self.InPathPosition())
+                    if (!self.is_in_position() && !self.in_path_position())
+                    {
                         waitList.push("position");
-                    if (self.IsWaitingOnFeature())
-                        waitList.push("feature");
-                    if (waitList.length > 1) {
-                        waitText += " for " + waitList.join(" and ");
-                        waitText += " to trigger";
+                        //console.log("Waiting on position.");
                     }
-                    else if (waitList.length === 1)
-                        waitText += " for " + waitList[0] + " to trigger";
+                    if (waitList.length > 0) {
+                        if (waitList.length === 1) {
+                            waitText += waitList[0];
+                        }
+                        else if (waitList.length > 1) {
+                            var commaSeparated = waitList.slice(0, waitList.length - 2);
+                            waitText += commaSeparated.join(", ");
+                            if (waitList.length > 2)
+                                waitText += ", ";
+                            waitText += waitList[waitList.length-1];
+                        }
+                        waitText += " to trigger.";
+                    }
                     return waitText;
                 }
-
+                else if (self.height_increment() != null && self.height_increment() > 0) {
+                    var heightToTrigger = self.height_increment() * (self.current_increment() + 1);
+                    return "Triggering when height reaches " + Octolapse.roundToIncrement(heightToTrigger,0.01).toString() + "mm.";
+                }
                 else
-                    return "Triggering in " + self.SecondsToTrigger() + " seconds";
+                    return "Triggering on next layer change.";
 
             }, self);
-            self.triggerBackgroundIconClass = ko.pureComputed(function () {
-                if (!self.IsHomed())
-                    return "bg-not-homed";
-                else if (!self.IsTriggered() && Octolapse.PrinterStatus.isPaused())
-                    return " bg-paused";
+
+            self.triggerTypeText = ko.pureComputed(function(){
+                if (self.height_increment() === 0) {
+                    return "Layer";
+                }
+                return "Height";
+            });
+
+            self.currentTriggerIncrement = ko.pureComputed(function(){
+                if (self.height_increment() === 0) {
+                    return self.layer;
+                }
+                return Octolapse.roundToIncrement(self.current_increment(),0.01).toString()  + "mm";
+            });
+
+            self.triggerOnText = ko.pureComputed(function () {
+                if (self.height_increment !== null || self.height_increment() === 0)
+                {
+                    return "Every Layer";
+                }
+
+                return "Every " + Octolapse.roundToIncrement(self.height_increment(),0.01).toString()  + "mm";
             }, self);
-            self.triggerIconClass = ko.pureComputed(function () {
-                if (!self.IsHomed())
-                    return "not-homed";
-                if (self.IsTriggered())
-                    return "trigger";
-                if (Octolapse.PrinterStatus.isPaused())
-                    return "paused";
-                if (self.IsWaiting())
-                    return " wait";
-                else
-                    return " fa-inverse";
-            }, self);
-            self.getInfoText = ko.pureComputed(function () {
-                return "Triggering every " + Octolapse.ToTimer(self.IntervalSeconds());
-            }, self);
-            self.getInfoIconText = ko.pureComputed(function () {
-                return "Triggering every " + Octolapse.ToTimer(self.IntervalSeconds());
-            }, self);
+
         };
 
-// Bind the settings view model to the plugin settings element
+        Octolapse.timerTriggerStateViewModel = function (state) {
+            //console.log("creating timer trigger state view model");
+            var self = this;
+            self.type = ko.observable(state.type);
+            self.name = ko.observable(state.name);
+            self.is_triggered = ko.observable(state.is_triggered);
+            self.is_waiting = ko.observable(state.is_waiting);
+            self.is_waiting_on_zhop = ko.observable(state.is_waiting_on_zhop);
+            self.is_waiting_on_extruder = ko.observable(state.is_waiting_on_extruder);
+            self.seconds_to_trigger = ko.observable(state.seconds_to_trigger);
+            self.interval_seconds = ko.observable(state.interval_seconds);
+            self.trigger_start_time = ko.observable(state.trigger_start_time).extend({time: null});
+            self.pause_time = ko.observable(state.pause_time).extend({time: null});
+            self.require_zhop = ko.observable(state.require_zhop);
+            self.trigger_count = ko.observable(state.trigger_count);
+            self.has_definite_position = ko.observable(state.has_definite_position);
+            self.is_in_position = ko.observable(state.is_in_position);
+            self.in_path_position = ko.observable(state.Isin_path_position);
+            self.update = function (state) {
+                self.type(state.type);
+                self.name(state.name);
+                self.is_triggered(state.is_triggered);
+                self.is_waiting(state.is_waiting);
+                self.is_waiting_on_zhop(state.is_waiting_on_zhop);
+                self.is_waiting_on_extruder(state.is_waiting_on_extruder);
+                self.require_zhop(state.require_zhop);
+                self.seconds_to_trigger(state.seconds_to_trigger);
+                self.trigger_start_time(state.trigger_start_time);
+                self.pause_time(state.pause_time);
+                self.interval_seconds(state.interval_seconds);
+                self.trigger_count(state.trigger_count);
+                self.has_definite_position(state.has_definite_position);
+                self.is_in_position(state.is_in_position);
+                self.in_path_position(state.in_path_position);
+            };
+
+            /* style related computed functions */
+            self.triggerStateText = ko.pureComputed(function () {
+                if (!self.has_definite_position())
+                    return "Idle until the printer's position is known.";
+                else if (self.is_triggered())
+                    return "Triggering a snapshot.";
+                else if (Octolapse.PrinterStatus.isPaused())
+                    return "The trigger is paused.";
+                else if (self.is_waiting()) {
+                    var waitText = "Waiting for";
+                    var waitList = [];
+                    if (self.is_waiting_on_zhop())
+                        waitList.push("zhop");
+                    if (self.is_waiting_on_extruder())
+                        waitList.push("extruder");
+                    if (!self.is_in_position() && !self.in_path_position())
+                    {
+                        waitList.push("position");
+                        //console.log("Waiting on position.");
+                    }
+                    if (waitList.length > 0) {
+                        if (waitList.length === 1) {
+                            waitText += waitList[0];
+                        }
+                        else if (waitList.length > 1) {
+                            var commaSeparated = waitList.slice(0, waitList.length - 2);
+                            waitText += commaSeparated.join(", ");
+                            if (waitList.length > 2)
+                                waitText += ", ";
+                            waitText += waitList[waitList.length-1];
+                        }
+                        waitText += " to trigger.";
+                    }
+                    return waitText;
+                }
+                else
+                    return "Triggering in " + self.secondsToTrigger() + ".";
+
+            }, self);
+
+            self.secondsInterval = ko.pureComputed(function () {
+                return Octolapse.ToTimer(self.interval_seconds());
+            }, self);
+
+            self.secondsToTrigger = ko.pureComputed(function () {
+                return Octolapse.ToTimer(self.seconds_to_trigger());
+            }, self);
+
+        };
+
         OCTOPRINT_VIEWMODELS.push([
             Octolapse.StatusViewModel
             , []

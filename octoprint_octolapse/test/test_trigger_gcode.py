@@ -32,10 +32,10 @@ from octoprint_octolapse.trigger import GcodeTrigger
 class TestGcodeTrigger(unittest.TestCase):
     def setUp(self):
         self.Settings = OctolapseSettings(NamedTemporaryFile().name)
-        self.Settings.current_printer().auto_detect_position = False
-        self.Settings.current_printer().origin_x = 0
-        self.Settings.current_printer().origin_y = 0
-        self.Settings.current_printer().origin_z = 0
+        self.Settings.profiles.current_printer().auto_detect_position = False
+        self.Settings.profiles.current_printer().home_x = 0
+        self.Settings.profiles.current_printer().home_y = 0
+        self.Settings.profiles.current_printer().home_z = 0
         self.OctoprintPrinterProfile = self.create_octoprint_printer_profile()
 
     def tearDown(self):
@@ -55,7 +55,7 @@ class TestGcodeTrigger(unittest.TestCase):
 
     def test_GcodeTrigger(self):
         """Test the gcode triggers"""
-        self.Settings.current_snapshot().gcode_trigger_require_zhop = False
+        self.Settings.profiles.current_snapshot().gcode_trigger_require_zhop = False
 
         position = Position(self.Settings, self.OctoprintPrinterProfile, False)
         trigger = GcodeTrigger(self.Settings)
@@ -64,7 +64,7 @@ class TestGcodeTrigger(unittest.TestCase):
         self.assertFalse(trigger.is_waiting(0))
 
         # send a command that is NOT the snapshot command using the defaults
-        trigger.update(position, "NotTheSnapshotCommand")
+        trigger.update(position, "NotThesnapshot_command")
         self.assertFalse(trigger.is_triggered(0))
         self.assertFalse(trigger.is_waiting(0))
 
@@ -88,37 +88,37 @@ class TestGcodeTrigger(unittest.TestCase):
         self.assertTrue(trigger.is_triggered(0))
         self.assertFalse(trigger.is_waiting(0))
 
-        # try again, but this time set RequireZHop to true
-        trigger.RequireZHop = True
+        # try again, but this time set require_zhop to true
+        trigger.require_zhop = True
         trigger.update(position, "snap")
         self.assertFalse(trigger.is_triggered(0))
         self.assertTrue(trigger.is_waiting(0))
         # send another command to see if we are still waiting
-        trigger.update(position, "NotTheSnapshotCommand")
+        trigger.update(position, "NotThesnapshot_command")
         self.assertFalse(trigger.is_triggered(0))
         self.assertTrue(trigger.is_waiting(0))
         # fake a zhop
         position.is_zhop = lambda x: True
-        trigger.update(position, "NotTheSnapshotCommand")
+        trigger.update(position, "NotThesnapshot_command")
         self.assertTrue(trigger.is_triggered(0))
         self.assertFalse(trigger.is_waiting(0))
 
         # send a command that is NOT the snapshot command using the defaults
-        trigger.update(position, "NotTheSnapshotCommand")
+        trigger.update(position, "NotThesnapshot_command")
         self.assertFalse(trigger.is_triggered(0))
         self.assertFalse(trigger.is_waiting(0))
 
         # change the snapshot triggers and make sure they are working
-        self.Settings.current_snapshot().gcode_trigger_require_zhop = None
-        self.Settings.current_snapshot().gcode_trigger_on_extruding = True
-        self.Settings.current_snapshot().gcode_trigger_on_extruding_start = None
-        self.Settings.current_snapshot().gcode_trigger_on_primed = None
-        self.Settings.current_snapshot().gcode_trigger_on_retracting = None
-        self.Settings.current_snapshot().gcode_trigger_on_partially_retracted = None
-        self.Settings.current_snapshot().gcode_trigger_on_retracted = None
-        self.Settings.current_snapshot().gcode_trigger_on_detracting_start = None
-        self.Settings.current_snapshot().gcode_trigger_on_detracting = None
-        self.Settings.current_snapshot().gcode_trigger_on_detracted = None
+        self.Settings.profiles.current_snapshot().gcode_trigger_require_zhop = None
+        self.Settings.profiles.current_snapshot().gcode_trigger_on_extruding = True
+        self.Settings.profiles.current_snapshot().gcode_trigger_on_extruding_start = None
+        self.Settings.profiles.current_snapshot().gcode_trigger_on_primed = None
+        self.Settings.profiles.current_snapshot().gcode_trigger_on_retracting = None
+        self.Settings.profiles.current_snapshot().gcode_trigger_on_partially_retracted = None
+        self.Settings.profiles.current_snapshot().gcode_trigger_on_retracted = None
+        self.Settings.profiles.current_snapshot().gcode_trigger_on_deretracting_start = None
+        self.Settings.profiles.current_snapshot().gcode_trigger_on_deretracting = None
+        self.Settings.profiles.current_snapshot().gcode_trigger_on_deretracted = None
         trigger = GcodeTrigger(self.Settings)
 
         # send a command that is the snapshot command using the defaults
@@ -128,7 +128,7 @@ class TestGcodeTrigger(unittest.TestCase):
         # change the extruder state and test
         # should not trigger because trigger tests the previous command
         position.update("G0 X0 Y0 Z0 E10 F0")
-        trigger.update(position, "NotTheSnapshotCommand")
+        trigger.update(position, "NotThesnapshot_command")
         self.assertTrue(trigger.is_triggered(0))
         self.assertFalse(trigger.is_waiting(0))
 
